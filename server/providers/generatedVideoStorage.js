@@ -1,22 +1,28 @@
-import { access, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { createVideoPosterBuffer } from './videoPoster.js'
 
-// 把 Ark 返回的临时视频链接转存到本地，作品库里保存的本地地址才不会过期。
 export async function cacheGeneratedVideo(videoUrl, taskId, outputRoot) {
   const fileName = `${taskId}.mp4`
+  const posterFileName = `${taskId}.jpg`
   const outputPath = path.join(outputRoot, fileName)
+  const posterPath = path.join(outputRoot, posterFileName)
   const publicPath = `/generated-videos/${fileName}`
+  const posterPublicPath = `/generated-videos/${posterFileName}`
 
   try {
     await access(outputPath)
-    return publicPath
+    return {
+      videoUrl: publicPath,
+      posterUrl: await ensureLocalPoster(outputPath, posterPath, posterPublicPath, taskId),
+    }
   } catch {
-    // 尚未转存，继续下载
+    // The video has not been cached yet.
   }
 
   const response = await fetch(videoUrl)
   if (!response.ok) {
-    throw new Error(`下载生成视频失败：HTTP ${response.status}`)
+    throw new Error(`Failed to download generated video: HTTP ${response.status}`)
   }
 
   await mkdir(outputRoot, { recursive: true })
@@ -33,5 +39,27 @@ export async function cacheGeneratedVideo(videoUrl, taskId, outputRoot) {
     }
   }
 
-  return publicPath
+  return {
+    videoUrl: publicPath,
+    posterUrl: await ensureLocalPoster(outputPath, posterPath, posterPublicPath, taskId),
+  }
+}
+
+async function ensureLocalPoster(videoPath, posterPath, posterPublicPath, taskId) {
+  try {
+    await access(posterPath)
+    return posterPublicPath
+  } catch {
+    // Poster has not been created yet.
+  }
+
+  try {
+    const videoBody = await readFile(videoPath)
+    const posterBody = await createVideoPosterBuffer(videoBody, taskId)
+    await writeFile(posterPath, posterBody)
+    return posterPublicPath
+  } catch (error) {
+    console.warn('Failed to create local generated-video poster.', error)
+    return ''
+  }
 }

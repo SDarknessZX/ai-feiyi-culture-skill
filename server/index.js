@@ -24,7 +24,7 @@ import {
   submitImageToVideoTask,
 } from './providers/arkVideo.js'
 import { cacheGeneratedVideo } from './providers/generatedVideoStorage.js'
-import { archiveGeneratedVideo, findArchivedVideo } from './providers/videoArchive.js'
+import { archiveGeneratedVideo, ensureArchivedVideoPoster } from './providers/videoArchive.js'
 import { getTosConfigReport, uploadFileToTos } from './providers/tosStorage.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
 
@@ -331,13 +331,14 @@ app.get('/api/tasks/:taskId', async (request, response) => {
 
   try {
     // 已归档的任务不再查 Ark：服务重启、Ark 链接过期都不影响已完成的作品
-    const archived = findArchivedVideo(taskId)
+    const archived = await ensureArchivedVideoPoster(taskId)
     if (archived) {
       return response.json({
         taskId,
         status: 'succeeded',
         mode,
         videoUrl: archived.videoUrl,
+        posterUrl: archived.posterUrl || '',
         message: '视频已生成，可以预览和下载。',
         ...(archived.templateTitle ? { templateTitle: archived.templateTitle } : {}),
       })
@@ -372,16 +373,20 @@ app.get('/api/tasks/:taskId', async (request, response) => {
     const data = await queryVideoGenerationTask(arkTaskId)
     if (data.status === 'succeeded' && data.videoUrl) {
       try {
-        data.videoUrl = await archiveGeneratedVideo({
+        const archived = await archiveGeneratedVideo({
           taskId,
           sourceUrl: data.videoUrl,
           mode: String(mode),
           templateTitle: templateTitle || '',
         })
+        data.videoUrl = archived.videoUrl
+        data.posterUrl = archived.posterUrl || ''
       } catch (error) {
         console.warn('归档视频到 TOS 失败，回退本地缓存：', error)
         try {
-          data.videoUrl = await cacheGeneratedVideo(data.videoUrl, taskId, generatedVideosRoot)
+          const cached = await cacheGeneratedVideo(data.videoUrl, taskId, generatedVideosRoot)
+          data.videoUrl = cached.videoUrl
+          data.posterUrl = cached.posterUrl || ''
         } catch (cacheError) {
           console.warn('本地缓存也失败，本次返回临时链接：', cacheError)
         }

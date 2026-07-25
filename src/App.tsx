@@ -44,6 +44,7 @@ type CreateResult = {
   templateTitle?: string
   previewUrl?: string
   videoUrl?: string
+  posterUrl?: string
 }
 
 type ModeDraft = {
@@ -77,6 +78,7 @@ type WorkItem = {
   title: string
   message: string
   videoUrl: string
+  posterUrl?: string
   createdAt: string
 }
 
@@ -88,6 +90,7 @@ type CreationRecord = {
   title: string
   message: string
   videoUrl?: string
+  posterUrl?: string
   createdAt: string
   source: 'work' | 'draft'
 }
@@ -352,6 +355,46 @@ function App() {
   }, [works])
 
   useEffect(() => {
+    const worksNeedingPosters = works.filter((item) => item.videoUrl && !item.posterUrl && item.taskId).slice(0, 4)
+    if (!worksNeedingPosters.length) return
+
+    let cancelled = false
+    void (async () => {
+      const posterEntries = await Promise.all(
+        worksNeedingPosters.map(async (item) => {
+          try {
+            const response = await fetch(`/api/tasks/${encodeURIComponent(item.taskId)}?mode=${encodeURIComponent(item.mode)}`)
+            if (!response.ok) return null
+            const data = (await response.json()) as CreateResult
+            return data.posterUrl ? { id: item.id, posterUrl: data.posterUrl } : null
+          } catch {
+            return null
+          }
+        }),
+      )
+
+      if (cancelled) return
+      const posterMap = new Map(
+        posterEntries
+          .filter((entry): entry is { id: string; posterUrl: string } => Boolean(entry?.posterUrl))
+          .map((entry) => [entry.id, entry.posterUrl]),
+      )
+      if (!posterMap.size) return
+
+      setWorks((currentWorks) =>
+        currentWorks.map((item) => {
+          const posterUrl = posterMap.get(item.id)
+          return posterUrl ? { ...item, posterUrl } : item
+        }),
+      )
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [works])
+
+  useEffect(() => {
     window.localStorage.setItem(usageAcceptedStorageKey, String(acceptedAgreement))
   }, [acceptedAgreement])
 
@@ -427,6 +470,7 @@ function App() {
           title: nextResult.templateTitle || modeLabels[nextResult.mode],
           message: nextResult.message,
           videoUrl: nextVideoUrl,
+          posterUrl: nextResult.posterUrl,
           createdAt: new Date().toISOString(),
         },
         ...currentWorks,
@@ -1295,7 +1339,7 @@ function ChatView({
           <article className="task-card">
             <div className="task-thumb">
               {videoUrl ? (
-                <PreviewVideo src={videoUrl} />
+                <PreviewVideo src={videoUrl} poster={result.posterUrl || ''} />
               ) : (
                 <>
                   <Loader2 className="spin" size={24} />
@@ -1439,6 +1483,7 @@ function VideoPosterFrame({
           preload="metadata"
           onLoadedMetadata={(event) => seekPosterFrame(event.currentTarget)}
           onSeeked={(event) => capturePoster(event.currentTarget)}
+          onError={() => setCaptureFailed(true)}
         />
       )}
       {showPlay && (
@@ -1758,7 +1803,7 @@ function CreationRecordCard({
       >
         {record.status === 'succeeded' && record.videoUrl ? (
           <>
-            <VideoPosterFrame src={record.videoUrl} />
+            <VideoPosterFrame src={record.videoUrl} poster={record.posterUrl || ''} />
             <span className="record-play">
               <Play size={20} fill="currentColor" />
             </span>
@@ -1821,7 +1866,7 @@ function RecordVideoModal({ record, onClose }: { record: CreationRecord; onClose
       <button className="record-video-close" type="button" onClick={onClose} aria-label="关闭视频预览">
         <X size={24} />
       </button>
-      <PreviewVideo src={record.videoUrl} />
+      <PreviewVideo src={record.videoUrl} poster={record.posterUrl || ''} />
       <div className="record-video-caption">
         <strong>{record.title}</strong>
         <span>点击播放按钮开启声音</span>
@@ -2280,6 +2325,7 @@ function buildCreationRecords(works: WorkItem[], drafts: Record<ModeId, ModeDraf
         title: result.templateTitle || modeLabels[mode as ModeId],
         message: result.message,
         videoUrl: result.videoUrl || result.previewUrl,
+        posterUrl: result.posterUrl,
         createdAt: new Date().toISOString(),
         source: 'draft' as const,
       },
@@ -2294,6 +2340,7 @@ function buildCreationRecords(works: WorkItem[], drafts: Record<ModeId, ModeDraf
     title: item.title,
     message: item.message,
     videoUrl: item.videoUrl,
+    posterUrl: item.posterUrl,
     createdAt: item.createdAt,
     source: 'work' as const,
   }))
