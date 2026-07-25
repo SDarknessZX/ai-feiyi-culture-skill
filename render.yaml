@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: ai-feiyi-culture-skill
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MODEL_PROVIDER
+        value: ark
+      - key: CREATE_RATE_LIMIT
+        value: 20
+      - key: ARK_BASE_URL
+        value: https://ark.cn-beijing.volces.com/api/v3
+      - key: ARK_VIDEO_MODEL
+        value: doubao-seedance-2-0-mini-260615
+      - key: ARK_VIDEO_RESOLUTION
+        value: 720p
+      - key: ARK_IMAGE_MODEL
+        value: doubao-seedream-5-0-260128
+      - key: ARK_IMAGE_SIZE
+        value: 2K
+      - key: ARK_IMAGE_WATERMARK
+        value: true
+      - key: ARK_LLM_MODEL
+        value: doubao-seed-2-0-mini-260428
+      - key: TOS_REGION
+        value: cn-beijing
+      - key: TOS_ENDPOINT
+        value: tos-cn-beijing.volces.com
+      - key: ARK_API_KEY
+        sync: false
+      - key: ARK_IMAGE_API_KEY
+        sync: false
+      - key: ARK_LLM_API_KEY
+        sync: false
+      - key: TOS_ACCESS_KEY_ID
+        sync: false
+      - key: TOS_SECRET_ACCESS_KEY
+        sync: false
+      - key: TOS_BUCKET
+        sync: false
+      - key: TOS_PUBLIC_BASE_URL
+        sync: false
