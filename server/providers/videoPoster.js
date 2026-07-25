@@ -14,11 +14,22 @@ export async function createVideoPosterBuffer(videoBuffer, taskId = 'video') {
 
   try {
     await writeFile(inputPath, videoBuffer)
-    await runFfmpeg(['-y', '-sseof', '-2', '-i', inputPath, '-frames:v', '1', '-q:v', '3', outputPath])
-    return await readFile(outputPath)
-  } catch {
-    await runFfmpeg(['-y', '-ss', '1', '-i', inputPath, '-frames:v', '1', '-q:v', '3', outputPath])
-    return await readFile(outputPath)
+    const attempts = [
+      ['-y', '-sseof', '-2', '-i', inputPath, '-vf', 'thumbnail=12', '-frames:v', '1', '-q:v', '3', outputPath],
+      ['-y', '-sseof', '-4', '-i', inputPath, '-vf', 'thumbnail=24', '-frames:v', '1', '-q:v', '3', outputPath],
+      ['-y', '-ss', '1', '-i', inputPath, '-vf', 'thumbnail=12', '-frames:v', '1', '-q:v', '3', outputPath],
+    ]
+
+    for (const args of attempts) {
+      try {
+        await runFfmpeg(args)
+        return await readFile(outputPath)
+      } catch {
+        // Try another nearby frame when the selected moment is blank or unavailable.
+      }
+    }
+
+    throw new Error('Failed to create video poster.')
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

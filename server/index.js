@@ -3,7 +3,7 @@ import 'dotenv/config'
 import express from 'express'
 import multer from 'multer'
 import crypto from 'node:crypto'
-import { unlink } from 'node:fs/promises'
+import { readFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
@@ -25,6 +25,7 @@ import {
 } from './providers/arkVideo.js'
 import { cacheGeneratedVideo } from './providers/generatedVideoStorage.js'
 import { archiveGeneratedVideo, ensureArchivedVideoPoster } from './providers/videoArchive.js'
+import { createVideoPosterBuffer } from './providers/videoPoster.js'
 import { getTosConfigReport, uploadFileToTos } from './providers/tosStorage.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
 
@@ -57,7 +58,15 @@ const chatSchema = z.object({
   message: z.string().trim().min(1).max(300),
 })
 
+const posterSchema = z.object({
+  taskId: z.string().regex(/^[\w-]{1,128}$/).optional(),
+  videoUrl: z.string().trim().min(1).max(2048),
+})
+
 const taskIdPattern = /^[\w-]{1,128}$/
+const generatedVideoNamePattern = /^[\w.-]+\.mp4$/i
+const templateVideoNamePattern = /^[^\\/]+\.mp4$/i
+const maxPosterSourceBytes = 60 * 1024 * 1024
 
 // 创建任务改为异步：/api/create 立刻返回 job id，重活在后台跑，
 // 避免公网隧道对长请求超时（serveo 等隧道等不到响应会回 502）。
@@ -227,6 +236,24 @@ app.post('/api/chat', async (request, response) => {
       reply: getFallbackChatReply(parsed.data.message),
       source: 'fallback',
     })
+  }
+})
+
+app.post('/api/video-poster', async (request, response) => {
+  const parsed = posterSchema.safeParse(request.body)
+  if (!parsed.success) {
+    return response.status(400).json({ posterUrl: '', message: '视频地址不正确，无法生成封面。' })
+  }
+
+  try {
+    const videoBuffer = await loadPosterSourceVideo(request, parsed.data.videoUrl)
+    const posterBuffer = await createVideoPosterBuffer(videoBuffer, parsed.data.taskId || `poster-${crypto.randomUUID()}`)
+    return response.json({
+      posterUrl: `data:image/jpeg;base64,${posterBuffer.toString('base64')}`,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '生成视频封面失败。'
+    return response.status(422).json({ posterUrl: '', message })
   }
 })
 
@@ -403,6 +430,60 @@ app.get('/api/tasks/:taskId', async (request, response) => {
     })
   }
 })
+
+async function loadPosterSourceVideo(request, videoUrl) {
+  const baseUrl = `${request.protocol}://${request.get('host') || 'localhost'}`
+  const url = new URL(videoUrl, baseUrl)
+  const isSameOrigin = !videoUrl.startsWith('http') || url.host === request.get('host')
+
+  if (isSameOrigin && url.pathname.startsWith('/generated-videos/')) {
+    const fileName = path.basename(decodeURIComponent(url.pathname))
+    if (!generatedVideoNamePattern.test(fileName)) {
+      throw new Error('本地视频文件名不正确。')
+    }
+    return readFile(path.join(generatedVideosRoot, fileName))
+  }
+
+  if (isSameOrigin && url.pathname.startsWith('/templates/')) {
+    const fileName = path.basename(decodeURIComponent(url.pathname))
+    if (!templateVideoNamePattern.test(fileName)) {
+      throw new Error('模板视频文件名不正确。')
+    }
+    return readFile(path.join(__dirname, '..', 'public', 'templates', fileName))
+  }
+
+  if (!['http:', 'https:'].includes(url.protocol) || isBlockedPosterHost(url.hostname)) {
+    throw new Error('只支持公网视频地址生成封面。')
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 45_000)
+  try {
+    const videoResponse = await fetch(url, { signal: controller.signal })
+    if (!videoResponse.ok) {
+      throw new Error(`下载视频失败：HTTP ${videoResponse.status}`)
+    }
+    const contentLength = Number(videoResponse.headers.get('content-length') || 0)
+    if (contentLength > maxPosterSourceBytes) {
+      throw new Error('视频文件过大，无法生成封面。')
+    }
+    const body = Buffer.from(await videoResponse.arrayBuffer())
+    if (body.byteLength > maxPosterSourceBytes) {
+      throw new Error('视频文件过大，无法生成封面。')
+    }
+    return body
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function isBlockedPosterHost(hostname) {
+  const host = hostname.toLowerCase()
+  if (['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(host)) return true
+  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true
+  const private172 = host.match(/^172\.(\d{1,2})\./)
+  return Boolean(private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31)
+}
 
 // 上传的临时文件用完即删，避免 uploads 目录无限增长。
 async function cleanupUpload(request) {

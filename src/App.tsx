@@ -107,6 +107,10 @@ type ChatResponse = {
   source?: 'llm' | 'fallback'
 }
 
+type PosterResponse = {
+  posterUrl?: string
+}
+
 type MiguEnv = {
   isInMiguAPP: boolean
   isInMiniprogram: boolean
@@ -362,14 +366,8 @@ function App() {
     void (async () => {
       const posterEntries = await Promise.all(
         worksNeedingPosters.map(async (item) => {
-          try {
-            const response = await fetch(`/api/tasks/${encodeURIComponent(item.taskId)}?mode=${encodeURIComponent(item.mode)}`)
-            if (!response.ok) return null
-            const data = (await response.json()) as CreateResult
-            return data.posterUrl ? { id: item.id, posterUrl: data.posterUrl } : null
-          } catch {
-            return null
-          }
+          const posterUrl = await fetchWorkPoster(item)
+          return posterUrl ? { id: item.id, posterUrl } : null
         }),
       )
 
@@ -2308,6 +2306,31 @@ function loadWorks() {
     return Array.isArray(parsed) ? parsed.filter((item) => item.videoUrl && item.taskId) : []
   } catch {
     return []
+  }
+}
+
+async function fetchWorkPoster(item: WorkItem) {
+  try {
+    const taskResponse = await fetch(`/api/tasks/${encodeURIComponent(item.taskId)}?mode=${encodeURIComponent(item.mode)}`)
+    if (taskResponse.ok) {
+      const taskData = (await taskResponse.json()) as CreateResult
+      if (taskData.posterUrl) return taskData.posterUrl
+    }
+  } catch {
+    // Fall back to creating a poster from the saved video URL.
+  }
+
+  try {
+    const posterResponse = await fetch('/api/video-poster', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId: item.taskId, videoUrl: item.videoUrl }),
+    })
+    if (!posterResponse.ok) return ''
+    const posterData = (await posterResponse.json()) as PosterResponse
+    return posterData.posterUrl || ''
+  } catch {
+    return ''
   }
 }
 
