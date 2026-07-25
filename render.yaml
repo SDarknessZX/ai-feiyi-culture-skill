@@ -3,12 +3,15 @@ services:
     name: ai-feiyi-culture-skill
     runtime: node
     plan: free
+    region: singapore
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: 24.14.1
       - key: MODEL_PROVIDER
         value: ark
       - key: CREATE_RATE_LIMIT
