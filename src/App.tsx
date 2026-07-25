@@ -34,7 +34,7 @@ type GenderId = 'female' | 'male'
 type CostumeGroupId = 'ethnic' | 'dynasty'
 type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 type AppView = 'home' | 'library' | 'chat' | 'detail'
-type CropRatio = 'free' | '9:16' | '1:1'
+type CropRatio = '9:16' | '1:1'
 
 type CreateResult = {
   taskId?: string
@@ -118,7 +118,7 @@ const modes = [
   {
     id: 'costume' as const,
     name: '图秀千年华裳',
-    short: '活化非遗',
+    short: '民族变装',
     icon: Sparkles,
     desc: '上传人物照，智能匹配民族服饰或华夏朝代造型，生成一支有音乐、有镜头、有传统风韵的竖版短片。',
     placeholder: '上传人物正脸照片，选择服饰模板',
@@ -126,15 +126,15 @@ const modes = [
   {
     id: 'food' as const,
     name: '图萌舌尖美味',
-    short: '美食活化',
+    short: '美食萌化',
     icon: Utensils,
     desc: '上传美食图片，AI 识别食材和风格，生成萌系制作演示短片，让地方味道动起来。',
     placeholder: '上传美食照片，生成萌系短片',
   },
   {
     id: 'painting' as const,
-    name: '活化非遗展示',
-    short: '活化非遗',
+    name: '年画生成展示',
+    short: '画作活化',
     icon: Palette,
     desc: '上传年画、壁画或剪纸等传统画作，一键生成细节动效与镜头演绎。',
     placeholder: '上传年画、剪纸或壁画，生成动态视频',
@@ -144,9 +144,9 @@ const modes = [
 type ModeConfig = (typeof modes)[number]
 
 const modeLabels: Record<ModeId, string> = {
-  costume: '非遗换装',
-  food: '萌系美食',
-  painting: '活化非遗',
+  costume: '民族变装',
+  food: '美食萌化',
+  painting: '画作活化',
 }
 
 const uploadHints: Record<ModeId, string> = {
@@ -291,7 +291,7 @@ function App() {
   const [uploadFlowPending, setUploadFlowPending] = useState(false)
   const [mediaPermissionGranted, setMediaPermissionGranted] = useState(() => window.localStorage.getItem(mediaPermissionStorageKey) === 'true')
   const [imageReviewing, setImageReviewing] = useState(false)
-  const [cropRatio, setCropRatio] = useState<CropRatio>('free')
+  const [cropRatio, setCropRatio] = useState<CropRatio>('9:16')
   const [toast, setToast] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatBusy, setChatBusy] = useState(false)
@@ -376,7 +376,7 @@ function App() {
         setTemplates((current) => ({
           ethnic: data.costumeEthnic?.length ? normalizeCostumeTitles(data.costumeEthnic) : current.ethnic,
           dynasty: data.costumeDynasty?.length ? normalizeCostumeTitles(data.costumeDynasty) : current.dynasty,
-          paintings: data.paintings?.length ? withPaintingSubtitles(data.paintings) : current.paintings,
+          paintings: data.paintings?.length ? data.paintings : current.paintings,
           food:
             data.food && Object.keys(data.food).length
               ? Object.entries(data.food).map(([id, items]) => ({
@@ -1304,6 +1304,7 @@ function ChatView({
   onUnlockHome: () => void
 }) {
   const [input, setInput] = useState('')
+  const taskProgress = result ? getTaskProgress(result) : 0
 
   function submitMessage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -1337,6 +1338,14 @@ function ChatView({
             <div className="task-info">
               <strong>{result.templateTitle || modeLabels[mode]}</strong>
               <p>{getStatusDescription(result)}</p>
+              {result.status !== 'failed' && (
+                <div className="task-progress" aria-label={`生成进度 ${taskProgress}%`}>
+                  <span style={{ width: `${taskProgress}%` }} />
+                </div>
+              )}
+              <p className="task-wait-hint">
+                {result.status === 'succeeded' ? '视频已生成，可以预览和下载。' : '视频生成需要一定时间，请稍等。'}
+              </p>
               <div className="task-actions">
                 {videoUrl && (
                   <a href={videoUrl} download target="_blank" rel="noreferrer">
@@ -1949,9 +1958,6 @@ function CropSheet({
           </div>
         </div>
         <div className="crop-options">
-          <button className={cropRatio === 'free' ? 'selected' : ''} type="button" onClick={() => onRatioChange('free')}>
-            自由
-          </button>
           <button className={cropRatio === '9:16' ? 'selected' : ''} type="button" onClick={() => onRatioChange('9:16')}>
             9:16
           </button>
@@ -1959,7 +1965,7 @@ function CropSheet({
             1:1
           </button>
         </div>
-        <p>{cropRatio === 'free' ? '自由取景不会强制锁定比例，可通过拖动或双指缩放调整主体位置。' : '请将人物等主体置于框内中央，可通过拖动或双指缩放裁剪图片。'}</p>
+        <p>请将人物等主体置于框内中央，可通过拖动或双指缩放裁剪图片。</p>
         <button className="sheet-secondary" type="button" onClick={onClose}>
           稍后再编辑
         </button>
@@ -2120,14 +2126,7 @@ function getVisibleTemplates(mode: ModeId, costumeOptions: CostumeOption[], temp
     }))
   }
   if (mode === 'food') return templates.food
-  return withPaintingSubtitles(templates.paintings)
-}
-
-function withPaintingSubtitles(items: TemplateItem[]): TemplateItem[] {
-  return items.map((item) => ({
-    ...item,
-    subtitle: '活化非遗',
-  }))
+  return templates.paintings
 }
 
 function normalizeCostumeTitles(items: CostumeOption[]): CostumeOption[] {
@@ -2218,6 +2217,18 @@ function getStatusDescription(result: CreateResult) {
   if (result.status === 'succeeded') return '作品已经准备好，可以预览、下载或在历史创作中再次查看。'
   if (result.status === 'running') return result.message || 'AI 正在生成约 10 秒的动态视频，关闭页面后回来也可以继续查询进度。'
   return result.message || '图片已提交，AI 正在准备创作，请稍候。'
+}
+
+function getTaskProgress(result: CreateResult) {
+  if (result.status === 'succeeded') return 100
+  if (result.status === 'failed') return 100
+  const message = result.message || ''
+  if (/提交|视频生成任务|Ark/.test(message)) return 72
+  if (/参考图|换装/.test(message)) return 54
+  if (/识别|提示词|分析/.test(message)) return 46
+  if (/上传|素材/.test(message)) return 28
+  if (result.status === 'running') return 62
+  return 18
 }
 
 function getLocalChatFallback(message: string) {

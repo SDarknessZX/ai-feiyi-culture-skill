@@ -961,6 +961,29 @@ button:disabled {
   line-height: 1.5;
 }
 
+.task-progress {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: #e6edf7;
+}
+
+.task-progress span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #48c0ff, #2f75ff 62%, #37a978);
+  box-shadow: 0 0 14px rgba(47, 117, 255, 0.22);
+  transition: width 0.45s ease;
+}
+
+.task-wait-hint {
+  color: #526988 !important;
+  font-weight: 800;
+}
+
 .task-actions {
   display: flex;
   gap: 8px;
