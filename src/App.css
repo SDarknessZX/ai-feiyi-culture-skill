@@ -425,7 +425,8 @@ button:disabled {
 }
 
 .template-card img,
-.template-card video {
+.template-card video,
+.template-card .video-poster-frame {
   display: block;
   width: 100%;
   height: 100%;
@@ -939,7 +940,8 @@ button:disabled {
 }
 
 .task-thumb .video-player,
-.task-thumb video {
+.task-thumb video,
+.task-thumb .video-poster-frame {
   width: 100%;
   height: 100%;
 }
@@ -1218,7 +1220,8 @@ button:disabled {
   transform: translateY(-1px);
 }
 
-.record-media video {
+.record-media video,
+.record-media .video-poster-frame {
   display: block;
   width: 100%;
   height: 100%;
@@ -1863,7 +1866,8 @@ button:disabled {
 }
 
 .asset-tile img,
-.asset-tile video {
+.asset-tile video,
+.asset-tile .video-poster-frame {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -2140,6 +2144,82 @@ button:disabled {
   position: relative;
   width: 100%;
   height: 100%;
+}
+
+.video-poster-button {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  color: #fff;
+  background: #10141d;
+}
+
+.video-poster-button > span {
+  position: absolute;
+  z-index: 4;
+  bottom: 12px;
+  left: 50%;
+  border-radius: 999px;
+  padding: 7px 11px;
+  background: rgba(15, 23, 42, 0.62);
+  backdrop-filter: blur(8px);
+  font-size: 12px;
+  font-weight: 900;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.video-poster-frame {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.2), transparent 24%),
+    #10141d;
+}
+
+.video-poster-frame img,
+.video-poster-frame video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.poster-capture-video {
+  position: absolute;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.video-poster-placeholder {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.82);
+  background: linear-gradient(145deg, #63c3ff, #3268ee);
+}
+
+.poster-play-mark {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.42);
+  transform: translate(-50%, -50%);
 }
 
 .video-player video {

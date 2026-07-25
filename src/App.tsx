@@ -1241,41 +1241,9 @@ function PauseIcon() {
 }
 
 function TemplateMedia({ item, className = '' }: { item: TemplateItem; className?: string }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video || !item.videoUrl) return
-    video.defaultMuted = true
-    video.muted = true
-    video.playsInline = true
-    const play = () => void video.play().catch(() => undefined)
-    play()
-    video.addEventListener('canplay', play)
-    video.addEventListener('loadeddata', play)
-    return () => {
-      video.removeEventListener('canplay', play)
-      video.removeEventListener('loadeddata', play)
-    }
-  }, [item.videoUrl])
-
-  if (item.videoUrl) {
-    return (
-      <video
-        ref={videoRef}
-        className={className}
-        src={item.videoUrl}
-        poster={item.imageUrl}
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="metadata"
-      />
-    )
-  }
-
-  return <img className={className} src={item.imageUrl} alt="" />
+  if (item.imageUrl) return <img className={className} src={item.imageUrl} alt="" />
+  if (item.videoUrl) return <VideoPosterFrame src={item.videoUrl} className={className} />
+  return <img className={className} src={fallbackTemplateImage} alt="" />
 }
 
 function ChatView({
@@ -1394,10 +1362,106 @@ function ChatView({
   )
 }
 
-function PreviewVideo({ src, className = '' }: { src: string; className?: string }) {
+function VideoPosterFrame({
+  src,
+  poster = '',
+  className = '',
+  showPlay = false,
+}: {
+  src: string
+  poster?: string
+  className?: string
+  showPlay?: boolean
+}) {
+  const [generatedPoster, setGeneratedPoster] = useState('')
+  const [captureFailed, setCaptureFailed] = useState(false)
+  const posterUrl = poster || generatedPoster
+
+  useEffect(() => {
+    setGeneratedPoster('')
+    setCaptureFailed(false)
+  }, [src, poster])
+
+  function capturePoster(video: HTMLVideoElement) {
+    if (poster || generatedPoster || captureFailed) return
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth || 720
+      canvas.height = video.videoHeight || 1280
+      const context = canvas.getContext('2d')
+      if (!context) {
+        setCaptureFailed(true)
+        return
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      setGeneratedPoster(canvas.toDataURL('image/jpeg', 0.84))
+    } catch {
+      setCaptureFailed(true)
+    }
+  }
+
+  function seekPosterFrame(video: HTMLVideoElement) {
+    if (poster || generatedPoster || captureFailed) return
+    const duration = Number.isFinite(video.duration) ? video.duration : 0
+    if (duration <= 0) {
+      setCaptureFailed(true)
+      return
+    }
+    try {
+      video.currentTime = Math.max(0, duration - 2)
+    } catch {
+      setCaptureFailed(true)
+    }
+  }
+
+  return (
+    <div className={`video-poster-frame ${className}`}>
+      {posterUrl ? (
+        <img src={posterUrl} alt="" />
+      ) : (
+        <div className="video-poster-placeholder">
+          <Play size={22} fill="currentColor" />
+        </div>
+      )}
+      {!poster && !generatedPoster && !captureFailed && (
+        <video
+          aria-hidden="true"
+          className="poster-capture-video"
+          src={src}
+          crossOrigin="anonymous"
+          muted
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={(event) => seekPosterFrame(event.currentTarget)}
+          onSeeked={(event) => capturePoster(event.currentTarget)}
+        />
+      )}
+      {showPlay && (
+        <span className="poster-play-mark" aria-hidden="true">
+          <Play size={20} fill="currentColor" />
+        </span>
+      )}
+    </div>
+  )
+}
+
+function PreviewVideo({ src, poster = '', className = '' }: { src: string; poster?: string; className?: string }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isMuted, setIsMuted] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [activated, setActivated] = useState(false)
+
+  useEffect(() => {
+    setActivated(false)
+    setIsPlaying(false)
+  }, [src])
+
+  useEffect(() => {
+    if (!activated) return
+    const timer = window.setTimeout(() => playWithSound(), 0)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activated])
 
   function prepareSound(video: HTMLVideoElement) {
     video.defaultMuted = false
@@ -1429,34 +1493,44 @@ function PreviewVideo({ src, className = '' }: { src: string; className?: string
 
   return (
     <div className="video-player">
-      <video
-        ref={videoRef}
-        className={className}
-        src={src}
-        controls
-        playsInline
-        preload="metadata"
-        onLoadedMetadata={(event) => prepareSound(event.currentTarget)}
-        onClick={playWithSound}
-        onPause={() => setIsPlaying(false)}
-        onPlay={() => setIsPlaying(true)}
-        onVolumeChange={(event) => setIsMuted(event.currentTarget.muted || event.currentTarget.volume === 0)}
-      />
-      {!isPlaying && (
-        <button className="video-play-overlay" type="button" onClick={playWithSound} aria-label="播放视频并开启声音">
-          <Play size={26} fill="currentColor" />
-          <span>播放并开启声音</span>
+      {!activated ? (
+        <button className="video-poster-button" type="button" onClick={() => setActivated(true)} aria-label="播放视频">
+          <VideoPosterFrame src={src} poster={poster} className={className} showPlay />
+          <span>点击播放视频</span>
         </button>
+      ) : (
+        <>
+          <video
+            ref={videoRef}
+            className={className}
+            src={src}
+            poster={poster}
+            controls
+            playsInline
+            preload="metadata"
+            onLoadedMetadata={(event) => prepareSound(event.currentTarget)}
+            onClick={playWithSound}
+            onPause={() => setIsPlaying(false)}
+            onPlay={() => setIsPlaying(true)}
+            onVolumeChange={(event) => setIsMuted(event.currentTarget.muted || event.currentTarget.volume === 0)}
+          />
+          {!isPlaying && (
+            <button className="video-play-overlay" type="button" onClick={playWithSound} aria-label="播放视频并开启声音">
+              <Play size={26} fill="currentColor" />
+              <span>播放并开启声音</span>
+            </button>
+          )}
+          <button
+            className="sound-toggle"
+            type="button"
+            onClick={toggleSound}
+            title={isMuted ? '开启声音' : '关闭声音'}
+            aria-label={isMuted ? '开启声音' : '关闭声音'}
+          >
+            {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          </button>
+        </>
       )}
-      <button
-        className="sound-toggle"
-        type="button"
-        onClick={toggleSound}
-        title={isMuted ? '开启声音' : '关闭声音'}
-        aria-label={isMuted ? '开启声音' : '关闭声音'}
-      >
-        {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-      </button>
     </div>
   )
 }
@@ -1639,7 +1713,7 @@ function CreationRecordCard({
       >
         {record.status === 'succeeded' && record.videoUrl ? (
           <>
-            <video src={record.videoUrl} preload="metadata" muted playsInline />
+            <VideoPosterFrame src={record.videoUrl} />
             <span className="record-play">
               <Play size={20} fill="currentColor" />
             </span>
