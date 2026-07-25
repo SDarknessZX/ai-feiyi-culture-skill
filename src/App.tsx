@@ -1375,11 +1375,13 @@ function VideoPosterFrame({
 }) {
   const [generatedPoster, setGeneratedPoster] = useState('')
   const [captureFailed, setCaptureFailed] = useState(false)
+  const [pausedFrameReady, setPausedFrameReady] = useState(false)
   const posterUrl = poster || generatedPoster
 
   useEffect(() => {
     setGeneratedPoster('')
     setCaptureFailed(false)
+    setPausedFrameReady(false)
   }, [src, poster])
 
   function capturePoster(video: HTMLVideoElement) {
@@ -1397,6 +1399,7 @@ function VideoPosterFrame({
       setGeneratedPoster(canvas.toDataURL('image/jpeg', 0.84))
     } catch {
       setCaptureFailed(true)
+      setPausedFrameReady(true)
     }
   }
 
@@ -1418,6 +1421,8 @@ function VideoPosterFrame({
     <div className={`video-poster-frame ${className}`}>
       {posterUrl ? (
         <img src={posterUrl} alt="" />
+      ) : captureFailed ? (
+        <PausedVideoFrame src={src} onReady={() => setPausedFrameReady(true)} />
       ) : (
         <div className="video-poster-placeholder">
           <Play size={22} fill="currentColor" />
@@ -1437,11 +1442,51 @@ function VideoPosterFrame({
         />
       )}
       {showPlay && (
-        <span className="poster-play-mark" aria-hidden="true">
+        <span className={`poster-play-mark ${pausedFrameReady || posterUrl ? '' : 'loading'}`} aria-hidden="true">
           <Play size={20} fill="currentColor" />
         </span>
       )}
     </div>
+  )
+}
+
+function PausedVideoFrame({ src, onReady }: { src: string; onReady: () => void }) {
+  const [ready, setReady] = useState(false)
+
+  function seekPosterFrame(video: HTMLVideoElement) {
+    const duration = Number.isFinite(video.duration) ? video.duration : 0
+    if (duration <= 0) return
+    try {
+      video.currentTime = Math.max(0, duration - 2)
+    } catch {
+      // 保持视频第一帧作为兜底封面。
+    }
+  }
+
+  function markReady() {
+    setReady(true)
+    onReady()
+  }
+
+  return (
+    <>
+      {!ready && (
+        <div className="video-poster-placeholder">
+          <Play size={22} fill="currentColor" />
+        </div>
+      )}
+      <video
+        aria-hidden="true"
+        className={ready ? 'paused-frame-video ready' : 'paused-frame-video'}
+        src={src}
+        muted
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={(event) => seekPosterFrame(event.currentTarget)}
+        onLoadedData={markReady}
+        onSeeked={markReady}
+      />
+    </>
   )
 }
 
