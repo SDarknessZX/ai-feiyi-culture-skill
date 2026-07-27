@@ -209,7 +209,14 @@ app.get('/api/health', (_request, response) => {
     },
   })
 })
+app.post('/api/compliance/callback', async (request, response) => {
+  console.log('机审回调收到：', JSON.stringify(request.body, null, 2))
 
+  response.json({
+    ok: true,
+    message: 'callback received',
+  })
+})
 app.get('/api/templates', (_request, response) => {
   response.json({
     costumes: costumeStyleTemplates.map(publicCostume),
