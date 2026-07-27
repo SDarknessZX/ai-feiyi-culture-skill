@@ -118,8 +118,12 @@ type MiguEnv = {
 
 const worksStorageKey = 'ai-yitu-zhenying-works'
 const pendingStorageKey = 'ai-yitu-zhenying-pending'
-const usageAcceptedStorageKey = 'ai-yitu-zhenying-usage-accepted'
+const usageAcceptedStorageKey = 'ai-yitu-zhenying-usage-accepted-202605'
 const mediaPermissionStorageKey = 'ai-yitu-zhenying-media-permission'
+const serviceProviderName = import.meta.env.VITE_SERVICE_PROVIDER_NAME?.trim() || '咪咕音乐有限公司'
+const privacyPolicyUrl =
+  import.meta.env.VITE_PRIVACY_POLICY_URL?.trim() ||
+  'https://passport.migu.cn/portal/privacy/protocol?sourceid=220024'
 
 const modes = [
   {
@@ -239,11 +243,6 @@ const chatTopics = [
 ]
 
 const usageNoticeTitle = 'AI应用照片采集使用须知'
-const usageNoticeParagraphs = [
-  'AI非遗文化skill服务由AI非遗文化skill提供，您同意使用本服务并上传图片，视为您授权本服务在本次AI创意视频生成中使用。您需对上传图片或文字内容的版权负责。',
-  '系统将通过后期技术在页面上生成新的AI创意视频。您上传的图片或视频仅用于本服务。如上传内容出现版权纠纷，平台可删除您上传的素材及制作内容。',
-  '请上传清晰图片，不得上传涉及隐私、违规披露个人信息、淫秽色情、暴力血腥、违反国家法律法规及可能带来潜在威胁的内容。您保证拥有上传内容的合法权利或已取得合法授权。',
-]
 
 function loadPendingTasks(): Partial<Record<ModeId, CreateResult>> {
   try {
@@ -527,7 +526,10 @@ function App() {
   function confirmUsageNotice() {
     setAcceptedAgreement(true)
     setShowUsageNotice(false)
-    if (uploadFlowPending && !mediaPermissionGranted) {
+    if (uploadFlowPending && miguEnv.isInMiguAPP) {
+      setMediaPermissionGranted(true)
+      window.setTimeout(() => fileRef.current?.click(), 120)
+    } else if (uploadFlowPending && !mediaPermissionGranted) {
       window.setTimeout(() => setShowPermissionDialog(true), 120)
     } else if (uploadFlowPending) {
       window.setTimeout(() => fileRef.current?.click(), 120)
@@ -838,8 +840,13 @@ function App() {
           onChooseTemplate={chooseTemplate}
           onCreate={() => void createVideo()}
           onOpenCreationPanel={() => setShowCreationPanel(true)}
+          onOpenInfo={() => setShowInfo(true)}
           onOpenTemplate={openTemplateDetail}
           onOpenLibrary={() => setView('library')}
+          onOpenUsageNotice={() => {
+            setUploadFlowPending(false)
+            setShowUsageNotice(true)
+          }}
           onRequestUpload={requestUpload}
           onShuffle={shuffleTemplates}
         />
@@ -947,8 +954,10 @@ function HomeView({
   onChooseTemplate,
   onCreate,
   onOpenCreationPanel,
+  onOpenInfo,
   onOpenLibrary,
   onOpenTemplate,
+  onOpenUsageNotice,
   onRequestUpload,
   onShuffle,
 }: {
@@ -979,8 +988,10 @@ function HomeView({
   onChooseTemplate: (id: string) => void
   onCreate: () => void
   onOpenCreationPanel: () => void
+  onOpenInfo: () => void
   onOpenLibrary: () => void
   onOpenTemplate: (template: TemplateItem) => void
+  onOpenUsageNotice: () => void
   onRequestUpload: () => void
   onShuffle: () => void
 }) {
@@ -990,6 +1001,10 @@ function HomeView({
       <div className="welcome-copy">
         <h1>Hi，欢迎来到AI非遗文化skill</h1>
         <p>用AI活化非遗影像，上传图片生成专属创意视频</p>
+        <button className="application-notice-entry" type="button" onClick={onOpenInfo}>
+          <Info size={13} />
+          应用说明
+        </button>
       </div>
 
       <button className="campaign-banner" type="button" onClick={() => window.open('#activity', '_self')}>
@@ -1084,10 +1099,23 @@ function HomeView({
           </button>
         </div>
 
-        <label className="agreement-row">
-          <input type="checkbox" checked={acceptedAgreement} onChange={(event) => onAgreementChange(event.target.checked)} />
-          <span>已阅读并同意创作协议，确认上传内容可用于本次生成</span>
-        </label>
+        <div className="agreement-row">
+          <input
+            id="usage-agreement"
+            type="checkbox"
+            checked={acceptedAgreement}
+            onChange={(event) => onAgreementChange(event.target.checked)}
+          />
+          <span>
+            <label htmlFor="usage-agreement">已阅读并同意</label>
+            <button type="button" onClick={onOpenUsageNotice}>
+              《{usageNoticeTitle}》
+            </button>
+          </span>
+        </div>
+        <p className="upload-provider-notice">
+          由<strong>{serviceProviderName}</strong>提供上传服务，您上传的图片仅用于本次AI内容创作，不会提取识别信息，也不会用于识别用途。
+        </p>
       </div>
     </section>
   )
@@ -1172,6 +1200,7 @@ function TemplateCarousel({
               }}
             >
               <TemplateMedia item={item} />
+              <AiContentPageMark />
               <span>{item.subtitle || modeLabels.costume}</span>
               <strong>{item.title}</strong>
               <em>做同款</em>
@@ -1241,6 +1270,7 @@ function TemplateDetail({
         ) : (
           <TemplateMedia item={template} />
         )}
+        <AiContentPageMark />
         {template.videoUrl && (
           <button
             className={`play-button ${isPlaying ? 'playing' : ''}`}
@@ -1278,6 +1308,14 @@ function PauseIcon() {
     <span className="pause-icon" aria-hidden="true">
       <i />
       <i />
+    </span>
+  )
+}
+
+function AiContentPageMark() {
+  return (
+    <span className="ai-content-page-mark" aria-label="内容由人工智能生成">
+      内容由AI生成
     </span>
   )
 }
@@ -1409,11 +1447,13 @@ function VideoPosterFrame({
   poster = '',
   className = '',
   showPlay = false,
+  showPageMark = true,
 }: {
   src: string
   poster?: string
   className?: string
   showPlay?: boolean
+  showPageMark?: boolean
 }) {
   const [generatedPoster, setGeneratedPoster] = useState('')
   const [captureFailed, setCaptureFailed] = useState(false)
@@ -1489,6 +1529,7 @@ function VideoPosterFrame({
           <Play size={20} fill="currentColor" />
         </span>
       )}
+      {showPageMark && <AiContentPageMark />}
     </div>
   )
 }
@@ -1583,7 +1624,7 @@ function PreviewVideo({ src, poster = '', className = '' }: { src: string; poste
     <div className="video-player">
       {!activated ? (
         <button className="video-poster-button" type="button" onClick={() => setActivated(true)} aria-label="播放视频">
-          <VideoPosterFrame src={src} poster={poster} className={className} showPlay />
+          <VideoPosterFrame src={src} poster={poster} className={className} showPlay showPageMark={false} />
           <span>点击播放视频</span>
         </button>
       ) : (
@@ -1619,6 +1660,7 @@ function PreviewVideo({ src, poster = '', className = '' }: { src: string; poste
           </button>
         </>
       )}
+      <AiContentPageMark />
     </div>
   )
 }
@@ -1967,9 +2009,32 @@ function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose
         </button>
         <h2 id="usage-notice-title">{usageNoticeTitle}</h2>
         <div className="notice-copy">
-          {usageNoticeParagraphs.map((paragraph) => (
-            <p key={paragraph}>{paragraph}</p>
-          ))}
+          <p>
+            1. AI非遗文化skill服务由<strong>{serviceProviderName}</strong>提供。您同意使用本服务并上传图片，视为您授权
+            <strong>{serviceProviderName}</strong>在本次服务内使用，<strong>您需对上传的图片/文字的版权负责</strong>
+            。系统将通过后期技术在页面上生成新的AI创意视频，在此过程中，您所上传的图片将仅被用于本服务。如您上传的内容出现版权纠纷，
+            <strong>{serviceProviderName}</strong>
+            可删除您上传的素材及制作的内容。咪咕音乐不承担因此带来的任何第三方责任及法律风险。请仔细阅读《{usageNoticeTitle}
+            》，您接受协议所述条款和条件后方可点击“我已阅读并同意”，或勾选“已阅读并同意《{usageNoticeTitle}》”。
+          </p>
+          <p>
+            2. 请上传清晰的图片。
+            <strong>
+              不得上传涉及隐私、违规披露个人信息、淫秽色情、暴力血腥、违反国家法律法规及可能对咪咕音乐运营及
+              {serviceProviderName}带来潜在威胁的内容。您保证对于上传的内容拥有相应的合法权利或已取得他人合法授权并有权用于参与本服务。
+            </strong>
+            否则，造成的一切后果及损失由您自行承担。
+          </p>
+          <p>
+            3.
+            本管理政策如果有未涉及的情况，则参考《咪咕用户服务协议》和相关法律法规及政策要求处理。用户违反上述规定的，咪咕音乐有权依据《咪咕用户服务协议》和本公告处理。
+          </p>
+          <p className="privacy-policy-link">
+            本公司的隐私政策链接：
+            <a href={privacyPolicyUrl} target="_blank" rel="noreferrer">
+              《咪咕音乐隐私政策》
+            </a>
+          </p>
         </div>
         <button className="sheet-primary" type="button" onClick={onAccept}>
           我已阅读并同意
@@ -2185,6 +2250,9 @@ function CreationPanel({
         </div>
         <h2 id="creation-title">1. 请选择照片</h2>
         <p>提取照片，生成你的专属{activeMode.short}视频。</p>
+        <p className="panel-provider-notice">
+          由<strong>{serviceProviderName}</strong>提供上传服务，上传图片仅用于本次AI内容创作，不会提取识别信息，也不会用于识别用途。
+        </p>
         <div className="asset-strip">
           <button className="asset-tile upload" type="button" onClick={onRequestUpload}>
             {imageReviewing ? <Loader2 className="spin" size={20} /> : <ImageUp size={21} />}
@@ -2218,6 +2286,7 @@ function CreationPanel({
               onClick={() => onSelectTemplate(item.id)}
             >
               <TemplateMedia item={item} />
+              <AiContentPageMark />
               {item.id === selectedTemplate?.id && <CheckBadge />}
             </button>
           ))}
@@ -2267,8 +2336,10 @@ function InfoModal({ onClose }: { onClose: () => void }) {
           ×
         </button>
         <h2 id="info-title">应用说明</h2>
-        <p>1、本服务由AI非遗文化skill提供，需要登录后方可使用。</p>
-        <p>2、应用在标注“活动体验”期间无需支付使用费用；未标注“活动体验”时，使用创作服务将按AI研发与算力成本规则收费。</p>
+        <p>
+          1、本服务由<strong>{serviceProviderName}</strong>提供，需要登录后方可使用。
+        </p>
+        <p>2、应用在标注“活动体验”期间无需支付使用费用。在没有标注“活动体验”时使用创作服务就会开始收费（收费标准结合AI研发和算力成本制定）。</p>
         <button type="button" onClick={onClose}>
           知道了
         </button>
@@ -2303,7 +2374,9 @@ function loadWorks() {
     const raw = window.localStorage.getItem(worksStorageKey)
     if (!raw) return []
     const parsed = JSON.parse(raw) as WorkItem[]
-    return Array.isArray(parsed) ? parsed.filter((item) => item.videoUrl && item.taskId) : []
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item.videoUrl && item.taskId && isWithinRecentSixMonths(item.createdAt))
+      : []
   } catch {
     return []
   }
@@ -2355,7 +2428,7 @@ function buildCreationRecords(works: WorkItem[], drafts: Record<ModeId, ModeDraf
     ]
   })
 
-  const workRecords = works.map((item) => ({
+  const workRecords = works.filter((item) => isWithinRecentSixMonths(item.createdAt)).map((item) => ({
     id: item.id,
     taskId: item.taskId,
     mode: item.mode,
@@ -2369,6 +2442,14 @@ function buildCreationRecords(works: WorkItem[], drafts: Record<ModeId, ModeDraf
   }))
 
   return [...draftRecords, ...workRecords]
+}
+
+function isWithinRecentSixMonths(value: string, now = new Date()) {
+  const createdAt = new Date(value)
+  if (Number.isNaN(createdAt.getTime())) return false
+  const cutoff = new Date(now)
+  cutoff.setMonth(cutoff.getMonth() - 6)
+  return createdAt >= cutoff
 }
 
 function getRecordFailureMessage(message: string) {

@@ -35,6 +35,23 @@ npm.cmd run build
 
 真实密钥只放在 `.env`，不要写入源码或提交到版本库。
 
+## AI 生成标识
+
+生成任务成功后，后端会先完成合规处理，再归档或返回视频：
+
+- 左下角叠加 `server/assets/migu-ai-watermark.png`，按视频宽度等比例缩放和定位；
+- 在 MP4 文件头写入 `AIGC` JSON 元数据和独立的 `WATERMARKFLAG=3`；
+- 从已加标识的视频生成封面，前端预览页另在右下角显示“内容由AI生成”；
+- 合规处理失败时不会回退返回 Ark 的未标识临时视频。
+
+历史归档视频可执行以下命令迁移。迁移会写入新对象并在成功后更新索引，不覆盖旧对象：
+
+```powershell
+npm.cmd run migrate:compliance
+```
+
+前端公司名称、隐私政策链接和 AIGC 生产者编号在 `.env` 中配置，字段示例见 `.env.example`。
+
 ## 提示词
 
 - 民族服饰：`prompts/costume/*.txt`

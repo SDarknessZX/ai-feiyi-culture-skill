@@ -25,6 +25,7 @@ import {
 } from './providers/arkVideo.js'
 import { cacheGeneratedVideo } from './providers/generatedVideoStorage.js'
 import { archiveGeneratedVideo, ensureArchivedVideoPoster } from './providers/videoArchive.js'
+import { createCompliantVideoBuffer, getVideoComplianceConfigReport } from './providers/videoCompliance.js'
 import { createVideoPosterBuffer } from './providers/videoPoster.js'
 import { getTosConfigReport, uploadFileToTos } from './providers/tosStorage.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
@@ -203,6 +204,7 @@ app.get('/api/health', (_request, response) => {
     provider: config.provider,
     config: {
       ...config,
+      compliance: getVideoComplianceConfigReport(),
       tos: getTosConfigReport(),
     },
   })
@@ -399,10 +401,14 @@ app.get('/api/tasks/:taskId', async (request, response) => {
 
     const data = await queryVideoGenerationTask(arkTaskId)
     if (data.status === 'succeeded' && data.videoUrl) {
+      const compliantVideoBuffer = await createCompliantVideoBuffer({
+        sourceUrl: data.videoUrl,
+        taskId,
+      })
       try {
         const archived = await archiveGeneratedVideo({
           taskId,
-          sourceUrl: data.videoUrl,
+          videoBuffer: compliantVideoBuffer,
           mode: String(mode),
           templateTitle: templateTitle || '',
         })
@@ -411,11 +417,13 @@ app.get('/api/tasks/:taskId', async (request, response) => {
       } catch (error) {
         console.warn('归档视频到 TOS 失败，回退本地缓存：', error)
         try {
-          const cached = await cacheGeneratedVideo(data.videoUrl, taskId, generatedVideosRoot)
+          const cached = await cacheGeneratedVideo(compliantVideoBuffer, taskId, generatedVideosRoot)
           data.videoUrl = cached.videoUrl
           data.posterUrl = cached.posterUrl || ''
         } catch (cacheError) {
-          console.warn('本地缓存也失败，本次返回临时链接：', cacheError)
+          throw new Error(
+            `合规视频归档失败，未返回未标识的临时视频：${cacheError instanceof Error ? cacheError.message : String(cacheError)}`,
+          )
         }
       }
     }

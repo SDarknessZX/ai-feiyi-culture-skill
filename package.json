@@ -8,6 +8,8 @@
     "web": "vite --host 0.0.0.0 --port 5188 --strictPort",
     "dev": "concurrently \"npm:api\" \"npm:web\"",
     "start": "node server/index.js",
+    "migrate:compliance": "node server/migrateVideoCompliance.js",
+    "test:compliance": "node --test server/providers/videoCompliance.test.js",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
