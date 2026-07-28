@@ -3538,8 +3538,9 @@ button:disabled {
 .creation-dock.with-composer,
 .view-home .creation-dock.with-composer,
 .view-chat .creation-dock.with-composer {
-  height: 274px;
-  min-height: 274px;
+  height: auto;
+  min-height: 0;
+  padding-bottom: calc(22px + env(safe-area-inset-bottom));
   background: #f2f5f8;
   box-shadow: none;
   backdrop-filter: none;
@@ -3555,11 +3556,11 @@ button:disabled {
 
 .app-shell:has(> .creation-dock.with-composer) .home-view,
 .app-shell:has(> .creation-dock.with-composer) .chat-view {
-  padding-bottom: 274px;
+  padding-bottom: calc(188px + env(safe-area-inset-bottom));
 }
 
 .app-shell:has(> .creation-dock.with-composer) .toast {
-  bottom: 286px;
+  bottom: calc(198px + env(safe-area-inset-bottom));
 }
 
 .media-source-backdrop {
