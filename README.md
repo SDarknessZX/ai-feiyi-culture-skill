@@ -42,10 +42,14 @@ npm.cmd run build
 本地安装一次 Python 依赖：
 
 ```powershell
+# 安装了 Python 3.11 时
 py -3.11 -m pip install -r requirements-face-detect.txt
+
+# 只有 Python 3.10 时
+py -3.10 -m pip install -r requirements-face-detect.txt
 ```
 
-Node 默认调用 `server/yunetFaceDetect.py`，模型使用项目内的 OpenCV 官方 `server/models/face_detection_yunet_2023mar.onnx`。Windows 默认选择 64 位 Python 3.11，Linux/macOS 默认使用 `python3`；需要覆盖时配置 `FACE_DETECT_PYTHON` 和 `FACE_DETECT_PYTHON_ARGS`。
+Node 默认调用 `server/yunetFaceDetect.py`，模型使用项目内的 OpenCV 官方 `server/models/face_detection_yunet_2023mar.onnx`。Windows 会依次自动尝试 64 位 Python 3.11、3.10 和系统默认 Python 3，Linux/macOS 会尝试 `python3` 和 `python`；需要强制指定时再配置 `FACE_DETECT_PYTHON` 和 `FACE_DETECT_PYTHON_ARGS`。
 
 同一图片的检测结果会短时缓存，前端校验通过后，`/api/create` 的服务端强校验不会重复运行模型。阈值和模型路径配置见 `.env.example`。
 

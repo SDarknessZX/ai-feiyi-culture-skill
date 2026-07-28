@@ -96,24 +96,46 @@ async function detectWithEndpoint({ buffer, file }) {
   }
 }
 
-function detectWithLocalYunet(filePath) {
+function getPythonCandidates() {
   const configuredPython = process.env.FACE_DETECT_PYTHON?.trim()
-  const python = configuredPython || (process.platform === 'win32' ? 'py' : 'python3')
-  const pythonArgs = process.env.FACE_DETECT_PYTHON_ARGS?.trim()
-    ? process.env.FACE_DETECT_PYTHON_ARGS.trim().split(/\s+/)
-    : !configuredPython && process.platform === 'win32'
-      ? ['-3.11']
-      : []
-  const modelPath = path.resolve(process.env.FACE_DETECT_MODEL_PATH?.trim() || defaultYunetModelPath)
-  const timeoutMs = positiveNumber(process.env.FACE_DETECT_LOCAL_TIMEOUT_MS, 30_000)
+  if (configuredPython) {
+    return [
+      {
+        command: configuredPython,
+        args: process.env.FACE_DETECT_PYTHON_ARGS?.trim()
+          ? process.env.FACE_DETECT_PYTHON_ARGS.trim().split(/\s+/)
+          : [],
+      },
+    ]
+  }
+  if (process.platform === 'win32') {
+    return [
+      { command: 'py', args: ['-3.11'] },
+      { command: 'py', args: ['-3.10'] },
+      { command: 'py', args: ['-3'] },
+      { command: 'python', args: [] },
+    ]
+  }
+  return [
+    { command: 'python3', args: [] },
+    { command: 'python', args: [] },
+  ]
+}
 
+function localDetectionError(message, retryable = false) {
+  const error = new Error(message)
+  error.retryable = retryable
+  return error
+}
+
+function runLocalYunet({ command, args }, filePath, modelPath, timeoutMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(
-      python,
-      [...pythonArgs, yunetScriptPath, '--image-path', path.resolve(filePath), '--model-path', modelPath],
+      command,
+      [...args, yunetScriptPath, '--image-path', path.resolve(filePath), '--model-path', modelPath],
       {
-      env: process.env,
-      windowsHide: true,
+        env: process.env,
+        windowsHide: true,
       },
     )
     let stdout = ''
@@ -139,14 +161,18 @@ function detectWithLocalYunet(filePath) {
       stderr = `${stderr}${chunk}`.slice(-128 * 1024)
     })
     child.on('error', (error) => {
-      finish(() => reject(new Error(`无法启动火山 LAS 人脸检测：${error.message}`)))
+      finish(() => reject(localDetectionError(`无法启动 Python：${error.message}`, true)))
     })
     child.on('close', (code) => {
       finish(() => {
         if (code !== 0) {
           const errorOutput = stderr.trim()
           if (/No module named ['"]cv2|opencv/i.test(errorOutput)) {
-            reject(new Error('当前 Python 环境未安装 OpenCV，请安装 requirements-face-detect.txt。'))
+            reject(localDetectionError('当前 Python 环境未安装 OpenCV。', true))
+            return
+          }
+          if (/Requested Python version|not installed|No suitable Python runtime/i.test(errorOutput)) {
+            reject(localDetectionError('未找到指定版本的 Python。', true))
             return
           }
           if (/模型文件不存在|FACE_DETECT_MODEL_PATH|onnx/i.test(errorOutput)) {
@@ -176,6 +202,27 @@ function detectWithLocalYunet(filePath) {
       })
     })
   })
+}
+
+async function detectWithLocalYunet(filePath) {
+  const modelPath = path.resolve(process.env.FACE_DETECT_MODEL_PATH?.trim() || defaultYunetModelPath)
+  const timeoutMs = positiveNumber(process.env.FACE_DETECT_LOCAL_TIMEOUT_MS, 30_000)
+  let lastError
+
+  for (const candidate of getPythonCandidates()) {
+    try {
+      return await runLocalYunet(candidate, filePath, modelPath, timeoutMs)
+    } catch (error) {
+      lastError = error
+      if (!error?.retryable) throw error
+    }
+  }
+
+  throw new Error(
+    `未找到已安装 OpenCV 的可用 Python 3 环境，请运行对应版本的 pip install -r requirements-face-detect.txt。${
+      lastError?.message ? `（${lastError.message}）` : ''
+    }`,
+  )
 }
 
 export async function detectFaces(file) {
