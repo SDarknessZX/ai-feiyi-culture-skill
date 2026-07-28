@@ -1248,6 +1248,7 @@ function HomeView({
       <div className="template-section">
         <TemplateCarousel
           items={templates}
+          mode={mode}
           selectedId={selectedTemplate?.id || ''}
           onOpenTemplate={onOpenTemplate}
           onSelect={onChooseTemplate}
@@ -1396,11 +1397,13 @@ function AgreementRow({
 
 function TemplateCarousel({
   items,
+  mode,
   selectedId,
   onOpenTemplate,
   onSelect,
 }: {
   items: TemplateItem[]
+  mode: ModeId
   selectedId: string
   onOpenTemplate: (template: TemplateItem) => void
   onSelect: (id: string) => void
@@ -1456,7 +1459,7 @@ function TemplateCarousel({
             >
               <TemplateMedia item={item} />
               <AiContentPageMark />
-              <span>{item.subtitle || modeLabels.costume}</span>
+              <span>{modeLabels[mode]}</span>
               <strong>{item.title}</strong>
               <em>做同款</em>
             </button>
