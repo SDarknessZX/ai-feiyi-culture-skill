@@ -39,7 +39,7 @@ type GenderId = 'female' | 'male'
 type CostumeGroupId = 'ethnic' | 'dynasty'
 type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 type AppView = 'home' | 'library' | 'chat' | 'detail'
-type CropRatio = '9:16' | '1:1'
+type CropRatio = '9:16' | '1:1' | 'free'
 type UploadSource = 'camera' | 'gallery'
 
 type CreateResult = {
@@ -2376,7 +2376,16 @@ function CropSheet({
   onRequestUpload: () => void
 }) {
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 })
+  const [freeFrame, setFreeFrame] = useState({ width: 72, height: 58 })
+  const cropStageRef = useRef<HTMLDivElement | null>(null)
   const pointersRef = useRef(new Map<number, { x: number; y: number }>())
+  const freeResizeRef = useRef({
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    startWidth: 72,
+    startHeight: 58,
+  })
   const gestureRef = useRef({
     startX: 0,
     startY: 0,
@@ -2444,6 +2453,39 @@ function CropSheet({
     }
   }
 
+  function handleFreeResizeStart(event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    freeResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: freeFrame.width,
+      startHeight: freeFrame.height,
+    }
+  }
+
+  function handleFreeResizeMove(event: React.PointerEvent<HTMLButtonElement>) {
+    if (freeResizeRef.current.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    const stage = cropStageRef.current
+    if (!stage) return
+    const bounds = stage.getBoundingClientRect()
+    setFreeFrame({
+      width: clamp(freeResizeRef.current.startWidth + ((event.clientX - freeResizeRef.current.startX) / bounds.width) * 200, 34, 88),
+      height: clamp(freeResizeRef.current.startHeight + ((event.clientY - freeResizeRef.current.startY) / bounds.height) * 200, 28, 84),
+    })
+  }
+
+  function handleFreeResizeEnd(event: React.PointerEvent<HTMLButtonElement>) {
+    if (freeResizeRef.current.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+    freeResizeRef.current.pointerId = -1
+  }
+
   return (
     <div className="sheet-backdrop crop-backdrop" role="presentation">
       <section className="bottom-sheet crop-sheet" role="dialog" aria-modal="true" aria-labelledby="crop-title">
@@ -2459,6 +2501,7 @@ function CropSheet({
         </div>
         <div
           className="crop-stage"
+          ref={cropStageRef}
           onPointerCancel={handlePointerEnd}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -2476,8 +2519,22 @@ function CropSheet({
           ) : (
             <ImageUp size={30} />
           )}
-          <div className={`crop-frame ratio-${cropRatio.replace(':', '-')}`}>
+          <div
+            className={`crop-frame ratio-${cropRatio.replace(':', '-')}`}
+            style={cropRatio === 'free' ? { width: `${freeFrame.width}%`, height: `${freeFrame.height}%` } : undefined}
+          >
             <Crop size={20} />
+            {cropRatio === 'free' && (
+              <button
+                className="crop-resize-handle"
+                type="button"
+                aria-label="拖动调整自由裁剪框大小"
+                onPointerCancel={handleFreeResizeEnd}
+                onPointerDown={handleFreeResizeStart}
+                onPointerMove={handleFreeResizeMove}
+                onPointerUp={handleFreeResizeEnd}
+              />
+            )}
           </div>
         </div>
         <div className="crop-options">
@@ -2487,8 +2544,15 @@ function CropSheet({
           <button className={cropRatio === '1:1' ? 'selected' : ''} type="button" onClick={() => onRatioChange('1:1')}>
             1:1
           </button>
+          <button className={cropRatio === 'free' ? 'selected' : ''} type="button" onClick={() => onRatioChange('free')}>
+            自由
+          </button>
         </div>
-        <p>请将人物等主体置于框内中央，可通过拖动或双指缩放裁剪图片。</p>
+        <p>
+          {cropRatio === 'free'
+            ? '拖动裁剪框右下角可自由调整宽高，同时支持拖动图片或双指缩放。'
+            : '请将人物等主体置于框内中央，可通过拖动或双指缩放裁剪图片。'}
+        </p>
         <button className="sheet-secondary" type="button" onClick={onClose}>
           稍后再编辑
         </button>

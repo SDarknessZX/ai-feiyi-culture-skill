@@ -1796,9 +1796,38 @@ button:disabled {
 
 .crop-frame.ratio-free {
   width: 72%;
-  aspect-ratio: 4 / 3;
+  height: 58%;
+  min-width: 34%;
+  min-height: 28%;
+  aspect-ratio: auto;
   border-style: dashed;
   box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.16);
+}
+
+.crop-resize-handle {
+  position: absolute;
+  right: -12px;
+  bottom: -12px;
+  width: 26px;
+  height: 26px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  padding: 0;
+  background: #ffd039;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.32);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.crop-resize-handle::before {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #6e5900;
+  border-bottom: 2px solid #6e5900;
+  content: '';
 }
 
 .crop-options {
@@ -3561,6 +3590,65 @@ button:disabled {
 
 .app-shell:has(> .creation-dock.with-composer) .toast {
   bottom: calc(198px + env(safe-area-inset-bottom));
+}
+
+/* 图片编辑在应用内浏览器中按可视高度收缩，确保标题与操作按钮始终可见 */
+.crop-backdrop {
+  padding-top: max(10px, env(safe-area-inset-top));
+}
+
+.crop-backdrop .crop-sheet {
+  width: min(375px, 100%);
+  max-height: min(76svh, 640px);
+  padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  background: #f7f9fc;
+  overscroll-behavior: contain;
+}
+
+.crop-sheet .sheet-handle {
+  margin-bottom: 8px;
+}
+
+.crop-sheet .crop-header {
+  position: sticky;
+  z-index: 4;
+  top: -2px;
+  padding-bottom: 6px;
+  background: #f7f9fc;
+}
+
+.crop-sheet .crop-stage {
+  height: clamp(220px, 35svh, 330px);
+  margin-top: 6px;
+}
+
+.crop-sheet .crop-options {
+  margin-top: 8px;
+}
+
+.crop-sheet > p {
+  margin-top: 6px;
+}
+
+.crop-sheet .sheet-secondary {
+  min-height: 42px;
+  margin-top: 8px;
+}
+
+@media (max-height: 700px) {
+  .crop-backdrop .crop-sheet {
+    max-height: 82svh;
+  }
+
+  .crop-sheet .crop-stage {
+    height: clamp(190px, 31svh, 240px);
+  }
+
+  .crop-sheet > p {
+    font-size: 11px;
+    line-height: 1.4;
+  }
 }
 
 .media-source-backdrop {
