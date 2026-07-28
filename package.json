@@ -10,6 +10,7 @@
     "start": "node server/index.js",
     "migrate:compliance": "node server/migrateVideoCompliance.js",
     "test:compliance": "node --test server/providers/videoCompliance.test.js",
+    "test:face-detect": "node --test server/providers/faceDetection.test.js",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

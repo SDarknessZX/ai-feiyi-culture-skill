@@ -28,6 +28,7 @@ import { archiveGeneratedVideo, ensureArchivedVideoPoster } from './providers/vi
 import { createCompliantVideoBuffer, getVideoComplianceConfigReport } from './providers/videoCompliance.js'
 import { createVideoPosterBuffer } from './providers/videoPoster.js'
 import { getTosConfigReport, uploadFileToTos } from './providers/tosStorage.js'
+import { detectFaces, getFaceDetectionConfigReport } from './providers/faceDetection.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -205,6 +206,7 @@ app.get('/api/health', (_request, response) => {
     config: {
       ...config,
       compliance: getVideoComplianceConfigReport(),
+      faceDetection: getFaceDetectionConfigReport(),
       tos: getTosConfigReport(),
     },
   })
@@ -225,6 +227,34 @@ app.get('/api/templates', (_request, response) => {
     food: foodShowcaseTemplates,
     paintings: paintingMotionTemplates.map(publicPainting),
   })
+})
+
+app.post('/api/face-detect', upload.single('image'), async (request, response) => {
+  if (!request.file) {
+    return response.status(400).json({
+      hasFace: false,
+      faceBoundingBoxes: [],
+      message: '请先上传一张需要检测人脸的图片。',
+    })
+  }
+
+  try {
+    const result = await detectFaces(request.file)
+    return response.json({
+      hasFace: result.hasFace,
+      faceBoundingBoxes: result.faceBoundingBoxes,
+      message: result.hasFace ? '人脸校验通过。' : '未检测到清晰人脸，请重新上传。',
+    })
+  } catch (error) {
+    console.error('YuNet 人脸检测失败：', error)
+    return response.status(503).json({
+      hasFace: false,
+      faceBoundingBoxes: [],
+      message: error instanceof Error ? error.message : '人脸检测服务暂不可用，请稍后重试。',
+    })
+  } finally {
+    await cleanupUpload(request)
+  }
 })
 
 app.post('/api/chat', async (request, response) => {
@@ -276,6 +306,27 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
   const input = parsed.data
   if (!request.file) {
     return response.status(400).json({ status: 'failed', message: '请先上传一张图片。' })
+  }
+
+  if (input.mode === 'costume') {
+    try {
+      const faceResult = await detectFaces(request.file)
+      if (!faceResult.hasFace) {
+        await cleanupUpload(request)
+        return response.status(422).json({
+          status: 'failed',
+          mode: input.mode,
+          message: '未检测到清晰人脸，请重新上传后再使用民族变装。',
+        })
+      }
+    } catch (error) {
+      await cleanupUpload(request)
+      return response.status(503).json({
+        status: 'failed',
+        mode: input.mode,
+        message: error instanceof Error ? error.message : '人脸检测服务暂不可用，请稍后重试。',
+      })
+    }
   }
 
   let style = null

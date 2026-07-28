@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     region: singapore
-    buildCommand: npm ci --include=dev && npm run build
+    buildCommand: python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-face-detect.txt && npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
@@ -40,6 +40,8 @@ services:
         sync: false
       - key: ARK_LLM_API_KEY
         sync: false
+      - key: FACE_DETECT_PYTHON
+        value: .venv/bin/python
       - key: TOS_ACCESS_KEY_ID
         sync: false
       - key: TOS_SECRET_ACCESS_KEY

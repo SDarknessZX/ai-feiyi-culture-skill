@@ -35,6 +35,20 @@ npm.cmd run build
 
 真实密钥只放在 `.env`，不要写入源码或提交到版本库。
 
+## 民族变装人脸检测
+
+民族变装在发起创作前强制进行 OpenCV YuNet 人脸检测。只有返回至少一个人脸框的图片才会进入生成流程；未检测到人脸或检测服务不可用时，前后端都会阻止任务创建。
+
+本地安装一次 Python 依赖：
+
+```powershell
+py -3.11 -m pip install -r requirements-face-detect.txt
+```
+
+Node 默认调用 `server/yunetFaceDetect.py`，模型使用项目内的 OpenCV 官方 `server/models/face_detection_yunet_2023mar.onnx`。Windows 默认选择 64 位 Python 3.11，Linux/macOS 默认使用 `python3`；需要覆盖时配置 `FACE_DETECT_PYTHON` 和 `FACE_DETECT_PYTHON_ARGS`。
+
+同一图片的检测结果会短时缓存，前端校验通过后，`/api/create` 的服务端强校验不会重复运行模型。阈值和模型路径配置见 `.env.example`。
+
 ## AI 生成标识
 
 生成任务成功后，后端会先完成合规处理，再归档或返回视频：
@@ -77,5 +91,6 @@ npm.cmd run migrate:compliance
 
 - `GET /api/health`：配置和服务状态
 - `GET /api/templates`：前端模板数据
+- `POST /api/face-detect`：上传图片并返回人脸框，仅民族变装使用
 - `POST /api/create`：上传图片并创建后台任务
 - `GET /api/tasks/:taskId`：查询生成任务和作品地址

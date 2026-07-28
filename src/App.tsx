@@ -123,6 +123,12 @@ type PosterResponse = {
   posterUrl?: string
 }
 
+type FaceDetectResponse = {
+  hasFace: boolean
+  faceBoundingBoxes?: number[][]
+  message?: string
+}
+
 type MiguEnv = {
   isInMiguAPP: boolean
   isInMiniprogram: boolean
@@ -717,25 +723,18 @@ function App() {
   }
 
   async function validateFace(nextFile: File) {
-    const FaceDetectorClass = (
-      window as unknown as {
-        FaceDetector?: new (options?: { fastMode?: boolean; maxDetectedFaces?: number }) => {
-          detect: (image: ImageBitmap) => Promise<unknown[]>
-        }
-      }
-    ).FaceDetector
-    if (!FaceDetectorClass || typeof createImageBitmap !== 'function') return true
-
-    const bitmap = await createImageBitmap(nextFile)
-    try {
-      const detector = new FaceDetectorClass({ fastMode: true, maxDetectedFaces: 3 })
-      const faces = await detector.detect(bitmap)
-      return faces.length > 0
-    } catch {
-      return true
-    } finally {
-      bitmap.close()
-    }
+    const formData = new FormData()
+    formData.append('image', nextFile)
+    const response = await fetch('/api/face-detect', {
+      method: 'POST',
+      body: formData,
+    })
+    const data = (await response.json().catch(() => ({
+      hasFace: false,
+      message: `人脸检测服务返回异常响应（HTTP ${response.status}）。`,
+    }))) as FaceDetectResponse
+    if (!response.ok) throw new Error(data.message || '人脸检测服务暂不可用，请稍后重试。')
+    return data
   }
 
   async function finishCropAndCreate() {
@@ -748,12 +747,19 @@ function App() {
     setShowCropSheet(false)
     if (mode === 'costume') {
       setFaceReviewing(true)
-      const facePassed = await validateFace(file)
-      setFaceReviewing(false)
-      if (!facePassed) {
-        setToast('未检测到清晰人脸，请重新上传')
+      try {
+        const faceResult = await validateFace(file)
+        if (!faceResult.hasFace) {
+          setToast(faceResult.message || '未检测到清晰人脸，请重新上传')
+          restorePreviousPanel()
+          return
+        }
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : '人脸检测服务暂不可用，请稍后重试')
         restorePreviousPanel()
         return
+      } finally {
+        setFaceReviewing(false)
       }
     }
 
