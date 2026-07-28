@@ -3053,6 +3053,36 @@ button:disabled {
   font-weight: 400;
 }
 
+.template-choice-tile::after {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 42%;
+  background: linear-gradient(180deg, transparent, rgba(10, 16, 28, 0.72));
+  content: '';
+  pointer-events: none;
+}
+
+.template-choice-label {
+  position: absolute;
+  z-index: 3;
+  right: 4px;
+  bottom: 5px;
+  left: 4px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .check-badge {
   top: -1px;
   right: -1px;
@@ -3447,10 +3477,20 @@ button:disabled {
   display: flex;
   height: 88px;
   flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding: 0;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
+}
+
+.view-home .bubble-row::-webkit-scrollbar {
+  display: none;
 }
 
 .bubble-track {

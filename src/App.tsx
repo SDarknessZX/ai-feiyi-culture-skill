@@ -1246,7 +1246,15 @@ function HomeView({
         <em>立即参与</em>
       </button>
 
-      <div className="bubble-row" aria-label="灵感气泡">
+      <div
+        className="bubble-row"
+        aria-label="灵感气泡"
+        onWheel={(event) => {
+          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+          event.preventDefault()
+          event.currentTarget.scrollLeft += event.deltaY
+        }}
+      >
         <div className="bubble-track bubble-track-top">{topBubbles.map(renderBubble)}</div>
         <div className="bubble-track bubble-track-bottom">{bottomBubbles.map(renderBubble)}</div>
       </div>
@@ -2665,16 +2673,16 @@ function CreationPanel({
           ))}
         </div>
         <h2>2. 模板随心选</h2>
-        <div className="asset-strip">
+        <div className="asset-strip template-choice-strip">
           {templates.map((item) => (
             <button
               key={item.id}
-              className={item.id === selectedTemplate?.id ? 'asset-tile selected' : 'asset-tile'}
+              className={item.id === selectedTemplate?.id ? 'asset-tile template-choice-tile selected' : 'asset-tile template-choice-tile'}
               type="button"
               onClick={() => onSelectTemplate(item.id)}
             >
               <TemplateMedia item={item} />
-              <AiContentPageMark />
+              <span className="template-choice-label">{item.title}</span>
               {item.id === selectedTemplate?.id && <CheckBadge />}
             </button>
           ))}
