@@ -1,9 +1,9 @@
 :root {
-  color: #28180f;
-  background: #fffaf3;
+  color: #121c37;
+  background: #deebfd;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    'Microsoft YaHei', sans-serif;
+    -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI',
+    sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -15,11 +15,12 @@
 }
 
 html {
-  background: #24150e;
+  background: #deebfd;
 }
 
 body {
   min-width: 320px;
   min-height: 100svh;
   margin: 0;
+  background: #deebfd;
 }

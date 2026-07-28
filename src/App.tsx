@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
+  Bell,
   Camera,
   Check,
   Crop,
-  Download,
   EllipsisVertical,
   Film,
   Gift,
   Grid2X2,
   ImageUp,
+  Images,
   Info,
   Library,
+  Lightbulb,
+  LogIn,
   Loader2,
   MessageCircle,
   Palette,
@@ -19,9 +22,11 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Sprout,
+  SquareArrowOutUpRight,
   Trash2,
-  Upload,
   Utensils,
+  VenetianMask,
   Volume2,
   VolumeX,
   Wand2,
@@ -35,6 +40,7 @@ type CostumeGroupId = 'ethnic' | 'dynasty'
 type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 type AppView = 'home' | 'library' | 'chat' | 'detail'
 type CropRatio = '9:16' | '1:1'
+type UploadSource = 'camera' | 'gallery'
 
 type CreateResult = {
   taskId?: string
@@ -61,6 +67,12 @@ type TemplateItem = {
   imageUrl: string
   videoUrl?: string
   subtitle?: string
+}
+
+type SampleImage = {
+  id: string
+  title: string
+  imageUrl: string
 }
 
 type CostumeOption = {
@@ -120,6 +132,9 @@ const worksStorageKey = 'ai-yitu-zhenying-works'
 const pendingStorageKey = 'ai-yitu-zhenying-pending'
 const usageAcceptedStorageKey = 'ai-yitu-zhenying-usage-accepted-202605'
 const mediaPermissionStorageKey = 'ai-yitu-zhenying-media-permission'
+const cameraPermissionStorageKey = 'ai-yitu-zhenying-camera-permission'
+const galleryPermissionStorageKey = 'ai-yitu-zhenying-gallery-permission'
+const loginStorageKey = 'ai-yitu-zhenying-login'
 const serviceProviderName = import.meta.env.VITE_SERVICE_PROVIDER_NAME?.trim() || '咪咕音乐有限公司'
 const privacyPolicyUrl =
   import.meta.env.VITE_PRIVACY_POLICY_URL?.trim() ||
@@ -130,7 +145,7 @@ const modes = [
     id: 'costume' as const,
     name: '图秀千年华裳',
     short: '民族变装',
-    icon: Sparkles,
+    icon: Sprout,
     desc: '上传人物照，智能匹配民族服饰或华夏朝代造型，生成一支有音乐、有镜头、有传统风韵的竖版短片。',
     placeholder: '上传人物正脸照片，选择服饰模板',
   },
@@ -138,7 +153,7 @@ const modes = [
     id: 'food' as const,
     name: '图萌舌尖美味',
     short: '美食萌化',
-    icon: Utensils,
+    icon: VenetianMask,
     desc: '上传美食图片，AI 识别食材和风格，生成萌系制作演示短片，让地方味道动起来。',
     placeholder: '上传美食照片，生成萌系短片',
   },
@@ -146,7 +161,7 @@ const modes = [
     id: 'painting' as const,
     name: '年画生成展示',
     short: '画作活化',
-    icon: Palette,
+    icon: Lightbulb,
     desc: '上传年画、壁画或剪纸等传统画作，一键生成细节动效与镜头演绎。',
     placeholder: '上传年画、剪纸或壁画，生成动态视频',
   },
@@ -160,25 +175,23 @@ const modeLabels: Record<ModeId, string> = {
   painting: '画作活化',
 }
 
-const uploadHints: Record<ModeId, string> = {
-  costume: '请上传包含人物正脸的照片',
-  food: '请上传清晰美食照片',
-  painting: '请上传年画、壁画、剪纸等照片',
+const sampleImagesByMode: Record<ModeId, SampleImage[]> = {
+  costume: [
+    { id: 'costume-sample-1', title: '民族变装人物样例一', imageUrl: '/samples/person1.png' },
+    { id: 'costume-sample-2', title: '民族变装人物样例二', imageUrl: '/samples/person2.png' },
+    { id: 'costume-sample-3', title: '民族变装人物样例三', imageUrl: '/samples/person3.png' },
+  ],
+  food: [
+    { id: 'food-sample-1', title: '美食萌化样例一', imageUrl: '/samples/food11.png' },
+    { id: 'food-sample-2', title: '美食萌化样例二', imageUrl: '/samples/food12.png' },
+    { id: 'food-sample-3', title: '美食萌化样例三', imageUrl: '/samples/food13.png' },
+  ],
+  painting: [
+    { id: 'painting-sample-1', title: '画作活化年画样例一', imageUrl: '/samples/nianhua1.png' },
+    { id: 'painting-sample-2', title: '画作活化年画样例二', imageUrl: '/samples/nianhua2.png' },
+    { id: 'painting-sample-3', title: '画作活化年画样例三', imageUrl: '/samples/nianhua3.png' },
+  ],
 }
-
-const genderOptions = [
-  { id: 'female' as const, label: '女性' },
-  { id: 'male' as const, label: '男性' },
-]
-
-type GenderOption = (typeof genderOptions)[number]
-
-const costumeGroups = [
-  { id: 'ethnic' as const, label: '民族服饰' },
-  { id: 'dynasty' as const, label: '华夏朝代' },
-]
-
-type CostumeGroupOption = (typeof costumeGroups)[number]
 
 const fallbackTemplateImage = '/templates/ethnic-miao.webp'
 
@@ -227,7 +240,7 @@ const inspirationBubbles = [
   { id: 'costume-main', label: '制作非遗换装短片', mode: 'costume' as const, icon: Sparkles },
   { id: 'food-main', label: '让美食变成动画', mode: 'food' as const, icon: Utensils },
   { id: 'painting-main', label: '让画作动起来', mode: 'painting' as const, icon: Palette },
-  { id: 'festival', label: '生成节日祝福视频', mode: 'costume' as const, icon: Gift },
+  { id: 'costume-dynasty', label: '体验宋代雅韵变装', mode: 'costume' as const, icon: Wand2 },
 ]
 
 const chatTopics = [
@@ -282,21 +295,40 @@ function App() {
   const [view, setView] = useState<AppView>('home')
   const [works, setWorks] = useState<WorkItem[]>(loadWorks)
   const [mode, setMode] = useState<ModeId>('costume')
+  const [chatMode, setChatMode] = useState<ModeId>('costume')
   const [gender, setGender] = useState<GenderId>('female')
   const [costumeGroup, setCostumeGroup] = useState<CostumeGroupId>('ethnic')
   const [costumeStyle, setCostumeStyle] = useState('ethnic-miao')
   const [paintingStyle, setPaintingStyle] = useState(paintingStyles[0].id)
   const [foodShowcase, setFoodShowcase] = useState('茶点')
   const [acceptedAgreement, setAcceptedAgreement] = useState(() => window.localStorage.getItem(usageAcceptedStorageKey) === 'true')
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    const search = new URLSearchParams(window.location.search)
+    return Boolean(search.get('token')) || window.localStorage.getItem(loginStorageKey) === 'true'
+  })
   const [showInfo, setShowInfo] = useState(false)
+  const [showLoginDialog, setShowLoginDialog] = useState(false)
   const [showUsageNotice, setShowUsageNotice] = useState(false)
+  const [showMediaSourceSheet, setShowMediaSourceSheet] = useState(false)
   const [showPermissionDialog, setShowPermissionDialog] = useState(false)
   const [showCreationPanel, setShowCreationPanel] = useState(false)
+  const [showQuickComposer, setShowQuickComposer] = useState(true)
   const [showCropSheet, setShowCropSheet] = useState(false)
   const [previewImageUrl, setPreviewImageUrl] = useState('')
   const [uploadFlowPending, setUploadFlowPending] = useState(false)
-  const [mediaPermissionGranted, setMediaPermissionGranted] = useState(() => window.localStorage.getItem(mediaPermissionStorageKey) === 'true')
+  const [uploadSource, setUploadSource] = useState<UploadSource>('gallery')
+  const [cameraPermissionGranted, setCameraPermissionGranted] = useState(
+    () =>
+      window.localStorage.getItem(cameraPermissionStorageKey) === 'true' ||
+      window.localStorage.getItem(mediaPermissionStorageKey) === 'true',
+  )
+  const [galleryPermissionGranted, setGalleryPermissionGranted] = useState(
+    () =>
+      window.localStorage.getItem(galleryPermissionStorageKey) === 'true' ||
+      window.localStorage.getItem(mediaPermissionStorageKey) === 'true',
+  )
   const [imageReviewing, setImageReviewing] = useState(false)
+  const [faceReviewing, setFaceReviewing] = useState(false)
   const [cropRatio, setCropRatio] = useState<CropRatio>('9:16')
   const [toast, setToast] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
@@ -314,6 +346,7 @@ function App() {
   })
   const fileRef = useRef<HTMLInputElement>(null)
   const resumeRef = useRef(false)
+  const returnToCreationPanelRef = useRef(false)
 
   const activeMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode])
   const costumeOptions = costumeGroup === 'ethnic' ? templates.ethnic : templates.dynasty
@@ -322,10 +355,10 @@ function App() {
     const selectedId = mode === 'costume' ? costumeStyle : mode === 'food' ? foodShowcase : paintingStyle
     return visibleTemplates.find((item) => item.id === selectedId) || visibleTemplates[0]
   }, [costumeStyle, foodShowcase, mode, paintingStyle, visibleTemplates])
-  const { file, preview, result, busy, polling } = drafts[mode]
-  const isWaiting = busy || polling
+  const { file, preview, busy } = drafts[mode]
   const hasRunningTask = Object.values(drafts).some((draft) => draft.busy || draft.polling)
-  const videoUrl = result?.videoUrl || result?.previewUrl
+  const chatResult = drafts[chatMode].result
+  const chatVideoUrl = chatResult?.videoUrl || chatResult?.previewUrl
 
   useEffect(() => {
     const ua = window.navigator.userAgent.toLowerCase()
@@ -351,6 +384,26 @@ function App() {
         ...nextDraft,
       },
     }))
+  }
+
+  async function chooseSampleImage(targetMode: ModeId, sample: SampleImage) {
+    try {
+      const response = await fetch(sample.imageUrl, { cache: 'force-cache' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const blob = await response.blob()
+      const fileType = blob.type || 'image/webp'
+      const extension = fileType.includes('png') ? 'png' : fileType.includes('jpeg') ? 'jpg' : 'webp'
+      const sampleFile = new File([blob], `${sample.id}.${extension}`, { type: fileType })
+      const currentPreview = drafts[targetMode].preview
+      if (currentPreview.startsWith('blob:')) URL.revokeObjectURL(currentPreview)
+      updateDraft(targetMode, {
+        file: sampleFile,
+        preview: sample.imageUrl,
+        result: null,
+      })
+    } catch {
+      setToast('样例图片加载失败，请重试')
+    }
   }
 
   useEffect(() => {
@@ -396,8 +449,16 @@ function App() {
   }, [acceptedAgreement])
 
   useEffect(() => {
-    window.localStorage.setItem(mediaPermissionStorageKey, String(mediaPermissionGranted))
-  }, [mediaPermissionGranted])
+    window.localStorage.setItem(cameraPermissionStorageKey, String(cameraPermissionGranted))
+  }, [cameraPermissionGranted])
+
+  useEffect(() => {
+    window.localStorage.setItem(galleryPermissionStorageKey, String(galleryPermissionGranted))
+  }, [galleryPermissionGranted])
+
+  useEffect(() => {
+    window.localStorage.setItem(loginStorageKey, String(isLoggedIn))
+  }, [isLoggedIn])
 
   useEffect(() => {
     if (!toast) return
@@ -486,12 +547,13 @@ function App() {
 
   function chooseMode(nextMode: ModeId) {
     setMode(nextMode)
+    setShowQuickComposer(true)
     setView('home')
   }
 
-  function chooseCostumeGroup(nextGroup: CostumeGroupId) {
-    setCostumeGroup(nextGroup)
-    setCostumeStyle(nextGroup === 'ethnic' ? 'ethnic-miao' : 'dynasty-song')
+  function returnHome() {
+    setShowQuickComposer(true)
+    setView('home')
   }
 
   function chooseTemplate(templateId: string) {
@@ -500,76 +562,204 @@ function App() {
     if (mode === 'painting') setPaintingStyle(templateId)
   }
 
+  function closeUploadOverlays() {
+    setShowLoginDialog(false)
+    setShowUsageNotice(false)
+    setShowMediaSourceSheet(false)
+    setShowPermissionDialog(false)
+    setShowCropSheet(false)
+  }
+
+  function restorePreviousPanel() {
+    closeUploadOverlays()
+    setUploadFlowPending(false)
+    if (returnToCreationPanelRef.current) {
+      window.setTimeout(() => setShowCreationPanel(true), 120)
+    }
+  }
+
+  function openMediaSourceChooser() {
+    closeUploadOverlays()
+    window.setTimeout(() => setShowMediaSourceSheet(true), 120)
+  }
+
   function requestUpload() {
+    returnToCreationPanelRef.current = returnToCreationPanelRef.current || showCreationPanel
     setUploadFlowPending(true)
     setShowCreationPanel(false)
     setPreviewImageUrl('')
+    closeUploadOverlays()
+
+    if (!isLoggedIn) {
+      setShowLoginDialog(true)
+      return
+    }
     if (!acceptedAgreement) {
-      setShowPermissionDialog(false)
-      setShowCropSheet(false)
       setShowUsageNotice(true)
       return
     }
-    if (miguEnv.isInMiguAPP) {
-      setMediaPermissionGranted(true)
-    } else if (!mediaPermissionGranted) {
-      setShowUsageNotice(false)
-      setShowCropSheet(false)
-      setShowPermissionDialog(true)
+    setShowMediaSourceSheet(true)
+  }
+
+  function confirmLogin() {
+    setIsLoggedIn(true)
+    setShowLoginDialog(false)
+    if (!acceptedAgreement) {
+      window.setTimeout(() => setShowUsageNotice(true), 120)
       return
     }
-    setShowUsageNotice(false)
-    setShowPermissionDialog(false)
-    fileRef.current?.click()
+    openMediaSourceChooser()
+  }
+
+  function closeLoginDialog() {
+    setShowLoginDialog(false)
+    restorePreviousPanel()
   }
 
   function confirmUsageNotice() {
     setAcceptedAgreement(true)
     setShowUsageNotice(false)
-    if (uploadFlowPending && miguEnv.isInMiguAPP) {
-      setMediaPermissionGranted(true)
-      window.setTimeout(() => fileRef.current?.click(), 120)
-    } else if (uploadFlowPending && !mediaPermissionGranted) {
-      window.setTimeout(() => setShowPermissionDialog(true), 120)
-    } else if (uploadFlowPending) {
-      window.setTimeout(() => fileRef.current?.click(), 120)
+    if (uploadFlowPending) {
+      openMediaSourceChooser()
+      return
     }
+    restorePreviousPanel()
+  }
+
+  function chooseMediaSource(source: UploadSource) {
+    setUploadSource(source)
+    setShowMediaSourceSheet(false)
+    const jointPermission = !miguEnv.isInMiguAPP || miguEnv.isInMiniprogram
+    const sourceGranted = source === 'camera' ? cameraPermissionGranted : galleryPermissionGranted
+    const permissionGranted = jointPermission ? cameraPermissionGranted && galleryPermissionGranted : sourceGranted
+    if (!permissionGranted) {
+      window.setTimeout(() => setShowPermissionDialog(true), 120)
+      return
+    }
+    window.setTimeout(() => fileRef.current?.click(), 120)
+  }
+
+  function closeMediaSourceSheet() {
+    setShowMediaSourceSheet(false)
+    restorePreviousPanel()
   }
 
   function confirmMediaPermission() {
-    setMediaPermissionGranted(true)
-    setShowPermissionDialog(false)
-    if (uploadFlowPending) {
-      window.setTimeout(() => fileRef.current?.click(), 120)
+    const jointPermission = !miguEnv.isInMiguAPP || miguEnv.isInMiniprogram
+    if (jointPermission) {
+      setCameraPermissionGranted(true)
+      setGalleryPermissionGranted(true)
+    } else if (uploadSource === 'camera') {
+      setCameraPermissionGranted(true)
+    } else {
+      setGalleryPermissionGranted(true)
     }
+    setShowPermissionDialog(false)
+    if (uploadFlowPending) window.setTimeout(() => fileRef.current?.click(), 120)
   }
 
   function closeUsageNotice() {
     setShowUsageNotice(false)
-    setUploadFlowPending(false)
+    restorePreviousPanel()
   }
 
   function closePermissionDialog() {
     setShowPermissionDialog(false)
-    setUploadFlowPending(false)
+    restorePreviousPanel()
+  }
+
+  async function reviewImage(nextFile: File) {
+    if (!nextFile.type.startsWith('image/') || nextFile.size > 12 * 1024 * 1024) return false
+    const objectUrl = URL.createObjectURL(nextFile)
+    try {
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const image = new Image()
+        image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
+        image.onerror = reject
+        image.src = objectUrl
+      })
+      return dimensions.width >= 160 && dimensions.height >= 160
+    } catch {
+      return false
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+    }
   }
 
   async function chooseFile(nextFile?: File) {
-    if (!nextFile) return
-    if (preview.startsWith('blob:')) URL.revokeObjectURL(preview)
+    if (!nextFile) {
+      restorePreviousPanel()
+      return
+    }
+
     setImageReviewing(true)
-    setUploadFlowPending(false)
+    setShowCreationPanel(false)
+    closeUploadOverlays()
+    const reviewPassed = await reviewImage(nextFile)
+    await wait(350)
+    setImageReviewing(false)
+
+    if (!reviewPassed) {
+      setToast('审核不通过，请重新上传')
+      restorePreviousPanel()
+      return
+    }
+
+    if (preview.startsWith('blob:')) URL.revokeObjectURL(preview)
     updateDraft(mode, {
       file: nextFile,
       result: null,
       preview: URL.createObjectURL(nextFile),
     })
-    await wait(450)
-    setImageReviewing(false)
-    setShowCreationPanel(false)
-    setShowUsageNotice(false)
-    setShowPermissionDialog(false)
+    setUploadFlowPending(false)
+    setCropRatio('9:16')
     setShowCropSheet(true)
+  }
+
+  async function validateFace(nextFile: File) {
+    const FaceDetectorClass = (
+      window as unknown as {
+        FaceDetector?: new (options?: { fastMode?: boolean; maxDetectedFaces?: number }) => {
+          detect: (image: ImageBitmap) => Promise<unknown[]>
+        }
+      }
+    ).FaceDetector
+    if (!FaceDetectorClass || typeof createImageBitmap !== 'function') return true
+
+    const bitmap = await createImageBitmap(nextFile)
+    try {
+      const detector = new FaceDetectorClass({ fastMode: true, maxDetectedFaces: 3 })
+      const faces = await detector.detect(bitmap)
+      return faces.length > 0
+    } catch {
+      return true
+    } finally {
+      bitmap.close()
+    }
+  }
+
+  async function finishCropAndCreate() {
+    if (!file) {
+      setToast('请重新上传图片')
+      restorePreviousPanel()
+      return
+    }
+
+    setShowCropSheet(false)
+    if (mode === 'costume') {
+      setFaceReviewing(true)
+      const facePassed = await validateFace(file)
+      setFaceReviewing(false)
+      if (!facePassed) {
+        setToast('未检测到清晰人脸，请重新上传')
+        restorePreviousPanel()
+        return
+      }
+    }
+
+    returnToCreationPanelRef.current = false
+    setToast(mode === 'costume' ? '人脸校验通过，正在发起创作' : '图片校验通过，正在发起创作')
+    void createVideo()
   }
 
   function removeUploadedImage() {
@@ -587,11 +777,21 @@ function App() {
       startNonCreativeChat()
       return
     }
+    if (item.id === 'costume-main' || item.id === 'costume-male') {
+      setCostumeGroup('ethnic')
+      setCostumeStyle('ethnic-miao')
+      setGender(item.id === 'costume-male' ? 'male' : 'female')
+    }
+    if (item.id === 'costume-dynasty') {
+      setCostumeGroup('dynasty')
+      setCostumeStyle('dynasty-song')
+    }
     setMode(item.mode)
     setView('home')
   }
 
   function startNonCreativeChat(topic?: (typeof chatTopics)[number]) {
+    setShowQuickComposer(true)
     if (topic) {
       void sendChatMessage(topic.prompt)
       return
@@ -658,13 +858,17 @@ function App() {
     }, 0)
   }
 
-  async function createVideo() {
-    if (hasRunningTask && !isWaiting) {
+  async function createVideo(targetMode: ModeId = mode) {
+    const targetDraft = drafts[targetMode]
+    const targetIsWaiting = targetDraft.busy || targetDraft.polling
+
+    if (hasRunningTask && !targetIsWaiting) {
       setToast('当前仅支持创作1个任务，请等待当前任务完成')
       return
     }
 
-    if (!file) {
+    if (!targetDraft.file) {
+      if (targetMode !== mode) setMode(targetMode)
       setToast('请上传你的创意图片或选择参考图')
       requestUpload()
       return
@@ -675,11 +879,10 @@ function App() {
       return
     }
 
-    const targetMode = mode
     updateDraft(targetMode, { busy: true, result: null })
 
     const formData = new FormData()
-    formData.append('image', file)
+    formData.append('image', targetDraft.file)
     formData.append('mode', targetMode)
     if (targetMode === 'costume') formData.append('template', costumeStyle)
     if (targetMode === 'painting') formData.append('template', paintingStyle)
@@ -703,10 +906,10 @@ function App() {
       data = { ...data, mode: targetMode }
       updateDraft(targetMode, { result: data })
       saveWork(data)
+      setChatMode(targetMode)
       setView('chat')
       setChatMessages([
-        { id: `user-${Date.now()}`, role: 'user', text: `使用「${selectedTemplate?.title || modeLabels[targetMode]}」发起创作` },
-        { id: `assistant-${Date.now()}`, role: 'assistant', text: data.message || '任务已提交，正在为你生成专属视频。' },
+        { id: `user-${Date.now()}`, role: 'user', text: `使用「${data.templateTitle || modeLabels[targetMode]}」发起创作` },
       ])
 
       if (response.ok && data.taskId && ['queued', 'running'].includes(data.status)) {
@@ -783,10 +986,28 @@ function App() {
     }
   }
 
+  async function shareCurrentPage() {
+    try {
+      if (window.navigator.share) {
+        await window.navigator.share({
+          title: 'AI非遗文化skill',
+          url: window.location.href,
+        })
+        return
+      }
+      await window.navigator.clipboard.writeText(window.location.href)
+      setToast('链接已复制')
+    } catch (error) {
+      if ((error as DOMException).name !== 'AbortError') setToast('暂时无法分享')
+    }
+  }
+
   return (
-    <main className={`app-shell${miguEnv.isInMiguAPP ? ' in-migu' : ''}${miguEnv.isInMiniprogram ? ' in-miniprogram' : ''}`}>
+    <main
+      className={`app-shell view-${view}${miguEnv.isInMiguAPP ? ' in-migu' : ''}${miguEnv.isInMiniprogram ? ' in-miniprogram' : ''}`}
+    >
       <header className="app-topbar">
-        <button className="icon-button" type="button" onClick={() => (view === 'home' ? undefined : setView('home'))} aria-label="返回首页">
+        <button className="icon-button" type="button" onClick={() => (view === 'home' ? undefined : returnHome())} aria-label="返回首页">
           <ArrowLeft size={20} />
         </button>
         <button className="title-button" type="button" onClick={() => setShowInfo(true)}>
@@ -794,81 +1015,50 @@ function App() {
           <Info size={14} />
         </button>
         <div className="topbar-actions">
-          <span className="credit-badge">
+          <button className="credit-badge" type="button" onClick={() => setToast('分贝明细暂未配置')} aria-label="查看分贝明细">
             <Sparkles size={13} />
             999
-          </span>
+          </button>
           <button className="works-pill" type="button" onClick={() => setView(view === 'library' ? 'home' : 'library')}>
             我的作品
           </button>
+          {view === 'chat' && (
+            <button className="share-button" type="button" onClick={() => void shareCurrentPage()} aria-label="分享当前页面">
+              <SquareArrowOutUpRight size={18} />
+            </button>
+          )}
         </div>
       </header>
 
       {view === 'home' && (
         <HomeView
-          acceptedAgreement={acceptedAgreement}
-          activeMode={activeMode}
-          busy={busy}
-          costumeGroup={costumeGroup}
-          costumeGroupItems={costumeGroups}
-          file={file}
-          fileRef={fileRef}
-          gender={gender}
-          genderItems={genderOptions}
-          hasHistory={works.length > 0}
-          imageReviewing={imageReviewing}
-          isWaiting={isWaiting}
           mode={mode}
-          modeItems={modes}
-          preview={preview}
           selectedTemplate={selectedTemplate}
           templates={visibleTemplates}
-          uploadHint={uploadHints[mode]}
-          onAgreementChange={(accepted) => {
-            if (accepted) {
-              setUploadFlowPending(false)
-              setShowUsageNotice(true)
-            } else {
-              setAcceptedAgreement(false)
-            }
-          }}
           onBubbleClick={handleBubbleClick}
-          onChooseCostumeGroup={chooseCostumeGroup}
-          onChooseFile={chooseFile}
-          onChooseGender={setGender}
-          onChooseMode={setMode}
           onChooseTemplate={chooseTemplate}
-          onCreate={() => void createVideo()}
-          onOpenCreationPanel={() => setShowCreationPanel(true)}
-          onOpenInfo={() => setShowInfo(true)}
           onOpenTemplate={openTemplateDetail}
           onOpenLibrary={() => setView('library')}
-          onOpenUsageNotice={() => {
-            setUploadFlowPending(false)
-            setShowUsageNotice(true)
-          }}
-          onRequestUpload={requestUpload}
           onShuffle={shuffleTemplates}
         />
       )}
 
       {view === 'detail' && selectedTemplate && (
-        <TemplateDetail activeMode={activeMode} template={selectedTemplate} onBack={() => setView('home')} onUse={useSameTemplate} />
+        <TemplateDetail activeMode={activeMode} template={selectedTemplate} onBack={returnHome} onUse={useSameTemplate} />
       )}
 
       {view === 'chat' && (
         <ChatView
           messages={chatMessages}
-          mode={mode}
-          result={result}
-          videoUrl={videoUrl}
-          polling={polling}
+          mode={chatMode}
+          result={chatResult}
+          videoUrl={chatVideoUrl}
           topics={chatTopics}
           chatBusy={chatBusy}
-          onRefresh={() => result?.taskId && void pollTask(result, mode)}
+          onRegenerate={() => void createVideo(chatMode)}
+          onPublish={() => setToast('发布视频页待接入')}
           onTopic={startNonCreativeChat}
-          onSendMessage={sendChatMessage}
-          onUnlockHome={() => setView('home')}
+          onUnlockHome={returnHome}
         />
       )}
 
@@ -879,23 +1069,72 @@ function App() {
           onClearDraft={clearDraftResult}
           onPickMode={chooseMode}
           onPublish={() => setToast('发布视频页待接入')}
-          onUnlockHome={() => setView('home')}
+          onUnlockHome={returnHome}
           works={works}
         />
       )}
 
+      {(view === 'home' || view === 'chat') && (
+        <CreationDock
+          acceptedAgreement={acceptedAgreement}
+          activeMode={activeMode}
+          busy={busy}
+          fileRef={fileRef}
+          imageReviewing={imageReviewing || faceReviewing}
+          isWaiting={hasRunningTask}
+          mode={mode}
+          modeItems={modes}
+          preview={preview}
+          showComposer={view === 'chat' || showQuickComposer}
+          uploadSource={uploadSource}
+          onAgreementChange={(accepted) => {
+            if (accepted) {
+              returnToCreationPanelRef.current = false
+              setUploadFlowPending(false)
+              setShowUsageNotice(true)
+            } else {
+              setAcceptedAgreement(false)
+            }
+          }}
+          onChooseFile={chooseFile}
+          onChooseMode={setMode}
+          onCreate={() => void createVideo()}
+          onExpandComposer={() => setShowQuickComposer(true)}
+          onOpenCreationPanel={() => {
+            returnToCreationPanelRef.current = false
+            setShowCreationPanel(true)
+            if (!drafts[mode].file) void chooseSampleImage(mode, sampleImagesByMode[mode][0])
+          }}
+          onOpenUsageNotice={() => {
+            returnToCreationPanelRef.current = false
+            setUploadFlowPending(false)
+            setShowUsageNotice(true)
+          }}
+          onRequestUpload={requestUpload}
+        />
+      )}
+
       {showInfo && <InfoModal onClose={() => setShowInfo(false)} />}
+      {showLoginDialog && <LoginDialog onCancel={closeLoginDialog} onConfirm={confirmLogin} />}
       {showUsageNotice && <UsageNoticeSheet onAccept={confirmUsageNotice} onClose={closeUsageNotice} />}
-      {showPermissionDialog && <PermissionDialog onCancel={closePermissionDialog} onConfirm={confirmMediaPermission} />}
+      {showMediaSourceSheet && (
+        <MediaSourceSheet onCancel={closeMediaSourceSheet} onChoose={chooseMediaSource} />
+      )}
+      {showPermissionDialog && (
+        <PermissionDialog
+          isJoint={!miguEnv.isInMiguAPP || miguEnv.isInMiniprogram}
+          source={uploadSource}
+          onCancel={closePermissionDialog}
+          onConfirm={confirmMediaPermission}
+        />
+      )}
+      {(imageReviewing || faceReviewing) && <ReviewingOverlay kind={faceReviewing ? 'face' : 'machine'} />}
       {showCropSheet && (
         <CropSheet
           cropRatio={cropRatio}
           preview={preview}
-          onClose={() => setShowCropSheet(false)}
-          onConfirm={() => {
-            setShowCropSheet(false)
-            if (mode === 'costume') setToast('人脸校验已通过')
-          }}
+          onClose={restorePreviousPanel}
+          onConfirm={() => void finishCropAndCreate()}
           onRatioChange={setCropRatio}
           onRequestUpload={requestUpload}
         />
@@ -903,20 +1142,45 @@ function App() {
       {showCreationPanel && (
         <CreationPanel
           activeMode={activeMode}
+          acceptedAgreement={acceptedAgreement}
           imageReviewing={imageReviewing}
           mode={mode}
           preview={preview}
+          samples={sampleImagesByMode[mode]}
           selectedTemplate={selectedTemplate}
           templates={visibleTemplates}
-          onClose={() => setShowCreationPanel(false)}
+          onClose={() => {
+            returnToCreationPanelRef.current = false
+            setShowCreationPanel(false)
+          }}
+          onAgreementChange={(accepted) => {
+            if (accepted) {
+              returnToCreationPanelRef.current = true
+              setUploadFlowPending(false)
+              setShowCreationPanel(false)
+              setShowUsageNotice(true)
+            } else {
+              setAcceptedAgreement(false)
+            }
+          }}
           onCreate={() => {
             setShowCreationPanel(false)
             void createVideo()
           }}
-          onChooseMode={setMode}
+          onChooseMode={(nextMode) => {
+            setMode(nextMode)
+            if (!drafts[nextMode].file) void chooseSampleImage(nextMode, sampleImagesByMode[nextMode][0])
+          }}
           onPreviewImage={setPreviewImageUrl}
           onRemoveImage={removeUploadedImage}
+          onOpenUsageNotice={() => {
+            returnToCreationPanelRef.current = true
+            setUploadFlowPending(false)
+            setShowCreationPanel(false)
+            setShowUsageNotice(true)
+          }}
           onRequestUpload={requestUpload}
+          onSelectSample={(sample) => void chooseSampleImage(mode, sample)}
           onSelectTemplate={chooseTemplate}
         />
       )}
@@ -927,84 +1191,42 @@ function App() {
 }
 
 function HomeView({
-  acceptedAgreement,
-  activeMode,
-  busy,
-  costumeGroup,
-  costumeGroupItems,
-  file,
-  fileRef,
-  gender,
-  genderItems,
-  hasHistory,
-  imageReviewing,
-  isWaiting,
   mode,
-  modeItems,
-  preview,
   selectedTemplate,
   templates,
-  uploadHint,
-  onAgreementChange,
   onBubbleClick,
-  onChooseCostumeGroup,
-  onChooseFile,
-  onChooseGender,
-  onChooseMode,
   onChooseTemplate,
-  onCreate,
-  onOpenCreationPanel,
-  onOpenInfo,
   onOpenLibrary,
   onOpenTemplate,
-  onOpenUsageNotice,
-  onRequestUpload,
   onShuffle,
 }: {
-  acceptedAgreement: boolean
-  activeMode: ModeConfig
-  busy: boolean
-  costumeGroup: CostumeGroupId
-  costumeGroupItems: CostumeGroupOption[]
-  file: File | null
-  fileRef: React.RefObject<HTMLInputElement | null>
-  gender: GenderId
-  genderItems: GenderOption[]
-  hasHistory: boolean
-  imageReviewing: boolean
-  isWaiting: boolean
   mode: ModeId
-  modeItems: ModeConfig[]
-  preview: string
   selectedTemplate?: TemplateItem
   templates: TemplateItem[]
-  uploadHint: string
-  onAgreementChange: (accepted: boolean) => void
   onBubbleClick: (item: (typeof inspirationBubbles)[number]) => void
-  onChooseCostumeGroup: (group: CostumeGroupId) => void
-  onChooseFile: (file?: File) => void | Promise<void>
-  onChooseGender: (gender: GenderId) => void
-  onChooseMode: (mode: ModeId) => void
   onChooseTemplate: (id: string) => void
-  onCreate: () => void
-  onOpenCreationPanel: () => void
-  onOpenInfo: () => void
   onOpenLibrary: () => void
   onOpenTemplate: (template: TemplateItem) => void
-  onOpenUsageNotice: () => void
-  onRequestUpload: () => void
   onShuffle: () => void
 }) {
+  const topBubbles = inspirationBubbles.filter((_, index) => index % 2 === 0)
+  const bottomBubbles = inspirationBubbles.filter((_, index) => index % 2 === 1)
+
+  function renderBubble(item: (typeof inspirationBubbles)[number]) {
+    const Icon = item.icon
+    return (
+      <button key={item.id} type="button" onClick={() => onBubbleClick(item)} className={item.mode === mode ? 'selected' : ''}>
+        <Icon size={16} />
+        {item.label}
+      </button>
+    )
+  }
+
   return (
     <section className="home-view">
-      <FloatingBubbles />
       <div className="welcome-copy">
         <h1>Hi，欢迎来到AI非遗文化skill</h1>
         <p>用AI活化非遗影像，上传图片生成专属创意视频</p>
-        <button className="application-notice-entry" type="button" onClick={onOpenInfo}>
-          <Info size={13} />
-          应用说明
-        </button>
       </div>
 
       <button className="campaign-banner" type="button" onClick={() => window.open('#activity', '_self')}>
@@ -1019,126 +1241,155 @@ function HomeView({
       </button>
 
       <div className="bubble-row" aria-label="灵感气泡">
-        {inspirationBubbles.map((item) => {
-          const Icon = item.icon
-          return (
-            <button key={item.id} type="button" onClick={() => onBubbleClick(item)} className={item.mode === mode ? 'selected' : ''}>
-              <Icon size={16} />
-              {item.label}
-            </button>
-          )
-        })}
+        <div className="bubble-track bubble-track-top">{topBubbles.map(renderBubble)}</div>
+        <div className="bubble-track bubble-track-bottom">{bottomBubbles.map(renderBubble)}</div>
       </div>
 
       <div className="template-section">
-        <div className="section-heading">
-          <span>{activeMode.name}</span>
-          <button type="button" onClick={onShuffle}>
-            <RefreshCw size={13} />
-            换一批
-          </button>
-        </div>
         <TemplateCarousel
           items={templates}
           selectedId={selectedTemplate?.id || ''}
           onOpenTemplate={onOpenTemplate}
           onSelect={onChooseTemplate}
         />
-      </div>
-
-      {hasHistory && (
-        <button className="history-toggle" type="button" onClick={onOpenLibrary}>
-          <Library size={14} />
-          点击展示历史创作
+        <button className="shuffle-button" type="button" onClick={onShuffle}>
+          <RefreshCw size={12} />
+          换一批
         </button>
-      )}
-
-      <div className="creation-dock">
-        <div className="dock-handle" />
-        <div className="mode-tabs" role="tablist" aria-label="创作类型">
-          {modeItems.map((item) => {
-            const Icon = item.icon
-            return (
-              <button key={item.id} className={item.id === mode ? 'active' : ''} onClick={() => onChooseMode(item.id)} type="button">
-                <Icon size={17} />
-                <span>{item.short}</span>
-              </button>
-            )
-          })}
-        </div>
-
-        {mode === 'costume' && (
-          <div className="inline-options">
-            <SegmentedControl items={genderItems} selectedId={gender} onSelect={onChooseGender} />
-            <SegmentedControl items={costumeGroupItems} selectedId={costumeGroup} onSelect={onChooseCostumeGroup} />
-          </div>
-        )}
-
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          onChange={(event) => {
-            void onChooseFile(event.target.files?.[0])
-            event.currentTarget.value = ''
-          }}
-          hidden
-        />
-
-        <div className="upload-preview">
-          <button className="camera-button" type="button" onClick={onRequestUpload} aria-label="上传照片">
-            {imageReviewing ? <Loader2 className="spin" size={20} /> : <Camera size={21} />}
-          </button>
-          <button className="prompt-input" type="button" onClick={onOpenCreationPanel}>
-            <span>{file ? file.name : uploadHint}</span>
-            {preview && <img src={preview} alt="上传预览" />}
-          </button>
-          <button className="send-button" type="button" onClick={onCreate} disabled={isWaiting}>
-            {isWaiting ? <Loader2 className="spin" size={17} /> : <Upload size={17} />}
-            {busy ? '提交中' : isWaiting ? '生成中' : '创作'}
-          </button>
-        </div>
-
-        <div className="agreement-row">
-          <input
-            id="usage-agreement"
-            type="checkbox"
-            checked={acceptedAgreement}
-            onChange={(event) => onAgreementChange(event.target.checked)}
-          />
-          <span>
-            <label htmlFor="usage-agreement">已阅读并同意</label>
-            <button type="button" onClick={onOpenUsageNotice}>
-              《{usageNoticeTitle}》
-            </button>
-          </span>
-        </div>
-        <p className="upload-provider-notice">
-          由<strong>{serviceProviderName}</strong>提供上传服务，您上传的图片仅用于本次AI内容创作，不会提取识别信息，也不会用于识别用途。
-        </p>
       </div>
+
+      <button className="history-toggle" type="button" onClick={onOpenLibrary}>
+        <Library size={14} />
+        点击展示历史创作
+      </button>
     </section>
   )
 }
 
-function FloatingBubbles() {
-  const bubbles = ['年画', '苗绣', '宋韵', '敦煌', '茶点', '鼓楼', '壁画']
-
+function CreationDock({
+  acceptedAgreement,
+  activeMode,
+  busy,
+  fileRef,
+  imageReviewing,
+  isWaiting,
+  mode,
+  modeItems,
+  preview,
+  showComposer,
+  uploadSource,
+  onAgreementChange,
+  onChooseFile,
+  onChooseMode,
+  onCreate,
+  onExpandComposer,
+  onOpenCreationPanel,
+  onOpenUsageNotice,
+  onRequestUpload,
+}: {
+  acceptedAgreement: boolean
+  activeMode: ModeConfig
+  busy: boolean
+  fileRef: React.RefObject<HTMLInputElement | null>
+  imageReviewing: boolean
+  isWaiting: boolean
+  mode: ModeId
+  modeItems: ModeConfig[]
+  preview: string
+  showComposer: boolean
+  uploadSource: UploadSource
+  onAgreementChange: (accepted: boolean) => void
+  onChooseFile: (file?: File) => void | Promise<void>
+  onChooseMode: (mode: ModeId) => void
+  onCreate: () => void
+  onExpandComposer: () => void
+  onOpenCreationPanel: () => void
+  onOpenUsageNotice: () => void
+  onRequestUpload: () => void
+}) {
   return (
-    <div className="floating-bubbles" aria-hidden="true">
-      {bubbles.map((label, index) => {
-        const bubbleStyle = {
-          '--bubble-top': `${8 + index * 18}px`,
-          '--bubble-delay': `${index * -2.2}s`,
-          '--bubble-duration': `${16 + index * 1.1}s`,
-        } as React.CSSProperties
+    <aside className={`creation-dock${showComposer ? ' with-composer' : ''}`} aria-label="快速创作">
+      <div className="dock-handle" />
+      <div className="mode-tabs" role="tablist" aria-label="创作类型">
+        {modeItems.map((item) => {
+          const Icon = item.icon
+          return (
+            <button
+              key={item.id}
+              className={item.id === mode ? 'active' : ''}
+              onClick={() => {
+                onChooseMode(item.id)
+                onExpandComposer()
+              }}
+              type="button"
+            >
+              <Icon size={16} />
+              <span>{item.short}</span>
+            </button>
+          )
+        })}
+      </div>
 
-        return (
-          <span key={label} style={bubbleStyle}>
-            {label}
-          </span>
-        )
-      })}
+      {showComposer && (
+        <>
+          <div className="upload-preview">
+            <button className="camera-button" type="button" onClick={onRequestUpload} aria-label="上传照片">
+              {imageReviewing ? <Loader2 className="spin" size={23} /> : <Camera size={24} />}
+            </button>
+            <button className="prompt-input" type="button" onClick={onOpenCreationPanel}>
+              {preview ? <img src={preview} alt="" /> : null}
+              <span>{preview ? `已选择图片，使用${activeMode.short}模板` : activeMode.placeholder}</span>
+            </button>
+            <button className="send-button" type="button" disabled={busy || isWaiting || imageReviewing} onClick={onCreate}>
+              <small>消耗 3</small>
+              {busy || isWaiting ? '创作中' : '发送'}
+            </button>
+          </div>
+          <AgreementRow
+            accepted={acceptedAgreement}
+            inputId="dock-usage-agreement"
+            onChange={onAgreementChange}
+            onOpenNotice={onOpenUsageNotice}
+          />
+        </>
+      )}
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        capture={uploadSource === 'camera' ? 'environment' : undefined}
+        onChange={(event) => {
+          void onChooseFile(event.target.files?.[0])
+          event.currentTarget.value = ''
+        }}
+        hidden
+      />
+    </aside>
+  )
+}
+
+function AgreementRow({
+  accepted,
+  inputId,
+  onChange,
+  onOpenNotice,
+}: {
+  accepted: boolean
+  inputId: string
+  onChange: (accepted: boolean) => void
+  onOpenNotice: () => void
+}) {
+  return (
+    <div className="agreement-row">
+      <input id={inputId} type="checkbox" checked={accepted} onChange={(event) => onChange(event.target.checked)} />
+      <span>
+        <label htmlFor={inputId}>已阅读</label>
+        <button type="button" onClick={onOpenNotice}>
+          《{usageNoticeTitle}》
+        </button>
+        <label htmlFor={inputId}>并确认授权</label>
+      </span>
     </div>
   )
 }
@@ -1157,10 +1408,14 @@ function TemplateCarousel({
   const activeRef = useRef<HTMLButtonElement | null>(null)
   const railRef = useRef<HTMLDivElement | null>(null)
   const selectedIndex = Math.max(0, items.findIndex((item) => item.id === selectedId))
+  const displayItems = items.length > 2 ? [items[items.length - 1], ...items, items[0]] : items
 
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
-  }, [selectedId])
+    const rail = railRef.current
+    const active = activeRef.current
+    if (!rail || !active) return
+    rail.scrollLeft = active.offsetLeft - (rail.clientWidth - active.clientWidth) / 2
+  }, [items, selectedId])
 
   function step(delta: number) {
     if (!items.length) return
@@ -1182,11 +1437,11 @@ function TemplateCarousel({
           event.currentTarget.scrollLeft += event.deltaY
         }}
       >
-        {items.map((item) => {
-          const selected = item.id === selectedId
+        {displayItems.map((item, displayIndex) => {
+          const selected = item.id === selectedId && (items.length <= 2 || displayIndex === selectedIndex + 1)
           return (
             <button
-              key={item.id}
+              key={`${item.id}-${displayIndex}`}
               ref={selected ? activeRef : undefined}
               type="button"
               className={selected ? 'template-card selected' : 'template-card'}
@@ -1331,36 +1586,25 @@ function ChatView({
   mode,
   result,
   videoUrl,
-  polling,
   topics,
   chatBusy,
-  onRefresh,
+  onRegenerate,
+  onPublish,
   onTopic,
-  onSendMessage,
   onUnlockHome,
 }: {
   messages: ChatMessage[]
   mode: ModeId
   result: CreateResult | null
   videoUrl?: string
-  polling: boolean
   topics: typeof chatTopics
   chatBusy: boolean
-  onRefresh: () => void
+  onRegenerate: () => void
+  onPublish: () => void
   onTopic: (topic: (typeof chatTopics)[number]) => void | Promise<void>
-  onSendMessage: (message: string) => void | Promise<void>
   onUnlockHome: () => void
 }) {
-  const [input, setInput] = useState('')
   const taskProgress = result ? getTaskProgress(result) : 0
-
-  function submitMessage(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const next = input.trim()
-    if (!next) return
-    setInput('')
-    void onSendMessage(next)
-  }
 
   return (
     <section className={result ? 'chat-view generation-view' : 'chat-view'}>
@@ -1372,72 +1616,60 @@ function ChatView({
         ))}
 
         {result && (
-          <article className="task-card">
+          <article className={`task-card status-${videoUrl ? 'succeeded' : result.status}`}>
             <div className="task-thumb">
               {videoUrl ? (
-                <PreviewVideo src={videoUrl} poster={result.posterUrl || ''} />
+                <VideoPosterFrame src={videoUrl} poster={result.posterUrl || ''} showPageMark={false} />
               ) : (
                 <>
-                  <Loader2 className="spin" size={24} />
-                  <span>{result.status === 'failed' ? '生成失败' : 'AI视频创作中...'}</span>
+                  {result.status === 'failed' ? <X size={24} /> : <Loader2 className="spin" size={30} />}
+                  <span>{result.status === 'failed' ? '失败' : `${taskProgress}%`}</span>
                 </>
               )}
             </div>
             <div className="task-info">
-              <strong>{result.templateTitle || modeLabels[mode]}</strong>
-              <p>{getStatusDescription(result)}</p>
-              {result.status !== 'failed' && (
-                <div className="task-progress" aria-label={`生成进度 ${taskProgress}%`}>
-                  <span style={{ width: `${taskProgress}%` }} />
-                </div>
+              <strong>{videoUrl ? result.templateTitle || modeLabels[mode] : result.status === 'failed' ? '生成失败' : 'AI非遗视频创作中...'}</strong>
+              {videoUrl ? (
+                <>
+                  <p>看一看，不喜欢就再来一版</p>
+                  <div className="task-actions">
+                    <button type="button" onClick={onRegenerate}>
+                      <RefreshCw size={14} />
+                      重新生成
+                    </button>
+                    <button className="publish-action" type="button" onClick={onPublish}>
+                      <Bell size={14} />
+                      发布视频
+                    </button>
+                  </div>
+                </>
+              ) : result.status === 'failed' ? (
+                <p>{result.message}</p>
+              ) : (
+                <span className="sr-only">正在生成你的专属创意视频，请稍候</span>
               )}
-              <p className="task-wait-hint">
-                {result.status === 'succeeded' ? '视频已生成，可以预览和下载。' : '视频生成需要一定时间，请稍等。'}
-              </p>
-              <div className="task-actions">
-                {videoUrl && (
-                  <a href={videoUrl} download target="_blank" rel="noreferrer">
-                    <Download size={15} />
-                    下载
-                  </a>
-                )}
-                {!videoUrl && result.taskId && (
-                  <button type="button" onClick={onRefresh} disabled={polling}>
-                    <RefreshCw size={15} />
-                    刷新
-                  </button>
-                )}
-              </div>
             </div>
           </article>
         )}
 
-        <div className="try-divider">试试新创意</div>
-        {topics.map((topic) => (
-          <button key={topic.prompt} className="topic-chip" type="button" onClick={() => void onTopic(topic)} disabled={chatBusy}>
-            {topic.prompt}
-          </button>
-        ))}
+        {(!result || videoUrl) && (
+          <>
+            <div className="try-divider">试试新创意</div>
+            {topics.map((topic) => (
+              <button key={topic.prompt} className="topic-chip" type="button" onClick={() => void onTopic(topic)} disabled={chatBusy}>
+                {topic.prompt}
+              </button>
+            ))}
+          </>
+        )}
       </div>
 
-      <button className="unlock-home" type="button" onClick={onUnlockHome}>
-        <Wand2 size={14} />
-        点击解锁更多玩法
-      </button>
-
-      <form className="chat-composer" onSubmit={submitMessage}>
-        <input
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder="输入你想聊的话题"
-          disabled={chatBusy}
-          aria-label="输入聊天内容"
-        />
-        <button type="submit" disabled={!input.trim() || chatBusy}>
-          {chatBusy ? <Loader2 className="spin" size={17} /> : <MessageCircle size={17} />}
-          发送
+      {(!result || videoUrl) && (
+        <button className="unlock-home" type="button" onClick={onUnlockHome}>
+          <Wand2 size={14} />
+          点击解锁更多玩法
         </button>
-      </form>
+      )}
     </section>
   )
 }
@@ -1661,31 +1893,6 @@ function PreviewVideo({ src, poster = '', className = '' }: { src: string; poste
         </>
       )}
       <AiContentPageMark />
-    </div>
-  )
-}
-
-type SegmentItem<T extends string> = {
-  id: T
-  label: string
-}
-
-function SegmentedControl<T extends string>({
-  items,
-  selectedId,
-  onSelect,
-}: {
-  items: SegmentItem<T>[]
-  selectedId: T
-  onSelect: (id: T) => void
-}) {
-  return (
-    <div className="segmented-control">
-      {items.map((item) => (
-        <button key={item.id} type="button" className={selectedId === item.id ? 'selected' : ''} onClick={() => onSelect(item.id)}>
-          {item.label}
-        </button>
-      ))}
     </div>
   )
 }
@@ -2001,12 +2208,15 @@ function ConfirmDialog({
 
 function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose: () => void }) {
   return (
-    <div className="sheet-backdrop notice-backdrop" role="presentation">
-      <section className="bottom-sheet notice-sheet" role="dialog" aria-modal="true" aria-labelledby="usage-notice-title">
+    <div className="sheet-backdrop notice-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="bottom-sheet notice-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="usage-notice-title"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="sheet-handle" />
-        <button className="sheet-close" type="button" onClick={onClose} aria-label="关闭须知">
-          <X size={18} />
-        </button>
         <h2 id="usage-notice-title">{usageNoticeTitle}</h2>
         <div className="notice-copy">
           <p>
@@ -2044,13 +2254,96 @@ function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose
   )
 }
 
-function PermissionDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="modal-backdrop soft permission-backdrop" role="presentation">
+      <section className="permission-dialog login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <LogIn size={24} />
+        <h2 id="login-title">登录后继续创作</h2>
+        <p>上传照片前需要完成登录校验。登录状态会在当前设备上保留，避免重复校验。</p>
+        <div className="dialog-actions">
+          <button type="button" onClick={onCancel}>
+            暂不登录
+          </button>
+          <button type="button" onClick={onConfirm}>
+            登录并继续
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function MediaSourceSheet({
+  onCancel,
+  onChoose,
+}: {
+  onCancel: () => void
+  onChoose: (source: UploadSource) => void
+}) {
+  return (
+    <div className="sheet-backdrop media-source-backdrop" role="presentation">
+      <section className="bottom-sheet media-source-sheet" role="dialog" aria-modal="true" aria-labelledby="media-source-title">
+        <div className="sheet-handle" />
+        <h2 id="media-source-title">请选择照片来源</h2>
+        <p>相机和相册权限分别记录，已授权后不会重复询问。</p>
+        <div className="media-source-actions">
+          <button type="button" onClick={() => onChoose('camera')}>
+            <Camera size={22} />
+            <span>
+              <strong>拍照</strong>
+              <small>打开相机拍摄照片</small>
+            </span>
+          </button>
+          <button type="button" onClick={() => onChoose('gallery')}>
+            <Images size={22} />
+            <span>
+              <strong>从相册选择</strong>
+              <small>使用设备中的照片</small>
+            </span>
+          </button>
+        </div>
+        <button className="sheet-secondary" type="button" onClick={onCancel}>
+          取消
+        </button>
+      </section>
+    </div>
+  )
+}
+
+function ReviewingOverlay({ kind }: { kind: 'machine' | 'face' }) {
+  return (
+    <div className="modal-backdrop soft reviewing-backdrop" role="status" aria-live="polite">
+      <div className="reviewing-card">
+        <Loader2 className="spin" size={25} />
+        <strong>{kind === 'machine' ? '图片机审中…' : '人脸校验中…'}</strong>
+        <span>{kind === 'machine' ? '正在检查图片内容与清晰度' : '正在确认照片中有清晰人脸'}</span>
+      </div>
+    </div>
+  )
+}
+
+function PermissionDialog({
+  isJoint,
+  source,
+  onCancel,
+  onConfirm,
+}: {
+  isJoint: boolean
+  source: UploadSource
+  onCancel: () => void
+  onConfirm: () => void
+}) {
   return (
     <div className="modal-backdrop soft permission-backdrop" role="presentation">
       <section className="permission-dialog" role="dialog" aria-modal="true" aria-labelledby="permission-title">
         <ShieldCheck size={24} />
         <h2 id="permission-title">请您选择照片</h2>
-        <p>访问您的相机/存储，用于AI应用内容创作服务。</p>
+        <p>
+          {isJoint
+            ? '需要允许访问相机和相册，用于AI应用内容创作服务。'
+            : `需要允许访问${source === 'camera' ? '相机' : '相册'}，授权状态将被记住。`}
+        </p>
         <div className="dialog-actions">
           <button type="button" onClick={onCancel}>
             取消
@@ -2202,41 +2495,57 @@ function CropSheet({
 }
 
 function CreationPanel({
+  acceptedAgreement,
   activeMode,
   imageReviewing,
   mode,
   preview,
+  samples,
   selectedTemplate,
   templates,
+  onAgreementChange,
   onClose,
   onCreate,
   onChooseMode,
   onPreviewImage,
   onRemoveImage,
+  onOpenUsageNotice,
   onRequestUpload,
+  onSelectSample,
   onSelectTemplate,
 }: {
+  acceptedAgreement: boolean
   activeMode: ModeConfig
   imageReviewing: boolean
   mode: ModeId
   preview: string
+  samples: SampleImage[]
   selectedTemplate?: TemplateItem
   templates: TemplateItem[]
+  onAgreementChange: (accepted: boolean) => void
   onClose: () => void
   onCreate: () => void
   onChooseMode: (mode: ModeId) => void
   onPreviewImage: (src: string) => void
   onRemoveImage: () => void
+  onOpenUsageNotice: () => void
   onRequestUpload: () => void
+  onSelectSample: (sample: SampleImage) => void
   onSelectTemplate: (id: string) => void
 }) {
+  const selectedSampleId = samples.find((sample) => sample.imageUrl === preview)?.id
+  const hasUploadedPreview = Boolean(preview && !selectedSampleId)
+
   return (
-    <div className="sheet-backdrop panel-backdrop" role="presentation">
-      <section className="bottom-sheet creation-panel" role="dialog" aria-modal="true" aria-labelledby="creation-title">
+    <div className="sheet-backdrop panel-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="bottom-sheet creation-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="creation-title"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="sheet-handle" />
-        <button className="sheet-close" type="button" onClick={onClose} aria-label="关闭创作面板">
-          <X size={18} />
-        </button>
         <div className="panel-mode-tabs">
           {modes.map((item) => {
             const Icon = item.icon
@@ -2248,17 +2557,16 @@ function CreationPanel({
             )
           })}
         </div>
-        <h2 id="creation-title">1. 请选择照片</h2>
-        <p>提取照片，生成你的专属{activeMode.short}视频。</p>
-        <p className="panel-provider-notice">
-          由<strong>{serviceProviderName}</strong>提供上传服务，上传图片仅用于本次AI内容创作，不会提取识别信息，也不会用于识别用途。
-        </p>
-        <div className="asset-strip">
+        <h2 id="creation-title">
+          1. 请选择照片
+          <small>提取照片，生成你的专属{activeMode.short}视频</small>
+        </h2>
+        <div className="asset-strip sample-image-strip">
           <button className="asset-tile upload" type="button" onClick={onRequestUpload}>
             {imageReviewing ? <Loader2 className="spin" size={20} /> : <ImageUp size={21} />}
             <span>上传图片</span>
           </button>
-          {preview && (
+          {hasUploadedPreview && (
             <div className="asset-tile selected uploaded-photo">
               <button type="button" onClick={() => onPreviewImage(preview)} aria-label="查看上传图片">
                 <img src={preview} alt="上传图片" />
@@ -2269,12 +2577,19 @@ function CreationPanel({
               <CheckBadge />
             </div>
           )}
-          {preview && (
-            <button className="asset-tile reupload" type="button" onClick={onRequestUpload}>
-              <RefreshCw size={18} />
-              <span>重新上传</span>
+          {samples.map((sample, index) => (
+            <button
+              key={sample.id}
+              className={sample.id === selectedSampleId ? 'asset-tile sample-tile selected' : 'asset-tile sample-tile'}
+              type="button"
+              title={sample.title}
+              aria-label={`选择${activeMode.short}样例图${index + 1}`}
+              onClick={() => onSelectSample(sample)}
+            >
+              <img src={sample.imageUrl} alt={sample.title} />
+              {sample.id === selectedSampleId && <CheckBadge />}
             </button>
-          )}
+          ))}
         </div>
         <h2>2. 模板随心选</h2>
         <div className="asset-strip">
@@ -2291,9 +2606,18 @@ function CreationPanel({
             </button>
           ))}
         </div>
-        <button className="panel-send" type="button" onClick={onCreate}>
-          发送
-        </button>
+        <div className="panel-footer">
+          <button className="panel-send" type="button" onClick={onCreate}>
+            <small>消耗 3</small>
+            发送
+          </button>
+          <AgreementRow
+            accepted={acceptedAgreement}
+            inputId="panel-usage-agreement"
+            onChange={onAgreementChange}
+            onOpenNotice={onOpenUsageNotice}
+          />
+        </div>
       </section>
     </div>
   )
@@ -2480,13 +2804,6 @@ function formatFullTime(value: string) {
     second: '2-digit',
     hour12: false,
   })
-}
-
-function getStatusDescription(result: CreateResult) {
-  if (result.status === 'failed') return result.message
-  if (result.status === 'succeeded') return '作品已经准备好，可以预览、下载或在历史创作中再次查看。'
-  if (result.status === 'running') return result.message || 'AI 正在生成约 10 秒的动态视频，关闭页面后回来也可以继续查询进度。'
-  return result.message || '图片已提交，AI 正在准备创作，请稍候。'
 }
 
 function getTaskProgress(result: CreateResult) {
