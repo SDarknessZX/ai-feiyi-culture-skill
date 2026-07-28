@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Bell,
   Camera,
+  ChefHat,
   Check,
   Crop,
   EllipsisVertical,
@@ -13,7 +14,6 @@ import {
   Images,
   Info,
   Library,
-  Lightbulb,
   LogIn,
   Loader2,
   MessageCircle,
@@ -21,12 +21,11 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  Shirt,
   Sparkles,
-  Sprout,
   SquareArrowOutUpRight,
   Trash2,
   Utensils,
-  VenetianMask,
   Volume2,
   VolumeX,
   Wand2,
@@ -73,6 +72,7 @@ type SampleImage = {
   id: string
   title: string
   imageUrl: string
+  thumbnailUrl: string
 }
 
 type CostumeOption = {
@@ -151,7 +151,7 @@ const modes = [
     id: 'costume' as const,
     name: '图秀千年华裳',
     short: '民族变装',
-    icon: Sprout,
+    icon: Shirt,
     desc: '上传人物照，智能匹配民族服饰或华夏朝代造型，生成一支有音乐、有镜头、有传统风韵的竖版短片。',
     placeholder: '上传人物正脸照片，选择服饰模板',
   },
@@ -159,7 +159,7 @@ const modes = [
     id: 'food' as const,
     name: '图萌舌尖美味',
     short: '美食萌化',
-    icon: VenetianMask,
+    icon: ChefHat,
     desc: '上传美食图片，AI 识别食材和风格，生成萌系制作演示短片，让地方味道动起来。',
     placeholder: '上传美食照片，生成萌系短片',
   },
@@ -167,7 +167,7 @@ const modes = [
     id: 'painting' as const,
     name: '年画生成展示',
     short: '画作活化',
-    icon: Lightbulb,
+    icon: Palette,
     desc: '上传年画、壁画或剪纸等传统画作，一键生成细节动效与镜头演绎。',
     placeholder: '上传年画、剪纸或壁画，生成动态视频',
   },
@@ -183,19 +183,19 @@ const modeLabels: Record<ModeId, string> = {
 
 const sampleImagesByMode: Record<ModeId, SampleImage[]> = {
   costume: [
-    { id: 'costume-sample-1', title: '民族变装人物样例一', imageUrl: '/samples/person1.png' },
-    { id: 'costume-sample-2', title: '民族变装人物样例二', imageUrl: '/samples/person2.png' },
-    { id: 'costume-sample-3', title: '民族变装人物样例三', imageUrl: '/samples/person3.png' },
+    { id: 'costume-sample-1', title: '民族变装人物样例一', imageUrl: '/samples/person1.png', thumbnailUrl: '/samples/thumbs/person1.webp' },
+    { id: 'costume-sample-2', title: '民族变装人物样例二', imageUrl: '/samples/person2.png', thumbnailUrl: '/samples/thumbs/person2.webp' },
+    { id: 'costume-sample-3', title: '民族变装人物样例三', imageUrl: '/samples/person3.png', thumbnailUrl: '/samples/thumbs/person3.webp' },
   ],
   food: [
-    { id: 'food-sample-1', title: '美食萌化样例一', imageUrl: '/samples/food11.png' },
-    { id: 'food-sample-2', title: '美食萌化样例二', imageUrl: '/samples/food12.png' },
-    { id: 'food-sample-3', title: '美食萌化样例三', imageUrl: '/samples/food13.png' },
+    { id: 'food-sample-1', title: '美食萌化样例一', imageUrl: '/samples/food11.png', thumbnailUrl: '/samples/thumbs/food11.webp' },
+    { id: 'food-sample-2', title: '美食萌化样例二', imageUrl: '/samples/food12.png', thumbnailUrl: '/samples/thumbs/food12.webp' },
+    { id: 'food-sample-3', title: '美食萌化样例三', imageUrl: '/samples/food13.png', thumbnailUrl: '/samples/thumbs/food13.webp' },
   ],
   painting: [
-    { id: 'painting-sample-1', title: '画作活化年画样例一', imageUrl: '/samples/nianhua1.png' },
-    { id: 'painting-sample-2', title: '画作活化年画样例二', imageUrl: '/samples/nianhua2.png' },
-    { id: 'painting-sample-3', title: '画作活化年画样例三', imageUrl: '/samples/nianhua3.png' },
+    { id: 'painting-sample-1', title: '画作活化年画样例一', imageUrl: '/samples/nianhua1.png', thumbnailUrl: '/samples/thumbs/nianhua1.webp' },
+    { id: 'painting-sample-2', title: '画作活化年画样例二', imageUrl: '/samples/nianhua2.png', thumbnailUrl: '/samples/thumbs/nianhua2.webp' },
+    { id: 'painting-sample-3', title: '画作活化年画样例三', imageUrl: '/samples/nianhua3.png', thumbnailUrl: '/samples/thumbs/nianhua3.webp' },
   ],
 }
 
@@ -241,12 +241,97 @@ type ApiTemplatesResponse = {
   food?: Record<string, { title?: string; imageUrl?: string; videoUrl?: string }[]>
 }
 
-const inspirationBubbles = [
-  { id: 'chat-random', label: '随机开启一场闲聊', mode: null, icon: MessageCircle },
-  { id: 'costume-main', label: '制作非遗换装短片', mode: 'costume' as const, icon: Sparkles },
-  { id: 'food-main', label: '让美食变成动画', mode: 'food' as const, icon: Utensils },
-  { id: 'painting-main', label: '让画作动起来', mode: 'painting' as const, icon: Palette },
-  { id: 'costume-dynasty', label: '体验宋代雅韵变装', mode: 'costume' as const, icon: Wand2 },
+type InspirationBubble = {
+  id: string
+  label: string
+  mode: ModeId | null
+  templateId?: string
+  costumeGroup?: CostumeGroupId
+  icon: typeof MessageCircle
+}
+
+const inspirationBubbles: InspirationBubble[] = [
+  { id: 'chat-flow', label: '进入你的对话流', mode: null, icon: MessageCircle },
+  {
+    id: 'costume-miao',
+    label: '邂逅银饰璀璨的苗族风情',
+    mode: 'costume',
+    templateId: 'ethnic-miao',
+    costumeGroup: 'ethnic',
+    icon: Sparkles,
+  },
+  {
+    id: 'costume-yi',
+    label: '体验热情似火的彝族风情',
+    mode: 'costume',
+    templateId: 'ethnic-yi',
+    costumeGroup: 'ethnic',
+    icon: Sparkles,
+  },
+  {
+    id: 'costume-dong',
+    label: '聆听侗族鼓楼下的悠扬歌声',
+    mode: 'costume',
+    templateId: 'ethnic-dong',
+    costumeGroup: 'ethnic',
+    icon: Wand2,
+  },
+  {
+    id: 'costume-zang',
+    label: '感受雪域圣洁的藏族风情',
+    mode: 'costume',
+    templateId: 'ethnic-zang',
+    costumeGroup: 'ethnic',
+    icon: Sparkles,
+  },
+  {
+    id: 'costume-uyghur',
+    label: '戴上花帽共舞维吾尔风情',
+    mode: 'costume',
+    templateId: 'ethnic-uyghur',
+    costumeGroup: 'ethnic',
+    icon: Wand2,
+  },
+  {
+    id: 'costume-mongol',
+    label: '奔赴辽阔豪迈的蒙古草原',
+    mode: 'costume',
+    templateId: 'ethnic-mongol',
+    costumeGroup: 'ethnic',
+    icon: Sparkles,
+  },
+  {
+    id: 'costume-song',
+    label: '一秒穿越宋代雅韵',
+    mode: 'costume',
+    templateId: 'dynasty-song',
+    costumeGroup: 'dynasty',
+    icon: Wand2,
+  },
+  {
+    id: 'costume-dunhuang',
+    label: '化身敦煌飞天翩然起舞',
+    mode: 'costume',
+    templateId: 'dynasty-dunhuang',
+    costumeGroup: 'dynasty',
+    icon: Wand2,
+  },
+  { id: 'food-noodle', label: '让长安臊子面萌动起来', mode: 'food', templateId: '臊子面', icon: Utensils },
+  { id: 'food-mooncake', label: '开启月宫月饼奇遇', mode: 'food', templateId: '月饼', icon: Utensils },
+  {
+    id: 'painting-new-year',
+    label: '唤醒喜庆吉祥的年画人物',
+    mode: 'painting',
+    templateId: 'new-year-figure',
+    icon: Palette,
+  },
+  {
+    id: 'painting-mural',
+    label: '让千年壁画翩然苏醒',
+    mode: 'painting',
+    templateId: 'mural-revive',
+    icon: Palette,
+  },
 ]
 
 const chatTopics = [
@@ -302,7 +387,7 @@ function App() {
   const [works, setWorks] = useState<WorkItem[]>(loadWorks)
   const [mode, setMode] = useState<ModeId>('costume')
   const [chatMode, setChatMode] = useState<ModeId>('costume')
-  const [gender, setGender] = useState<GenderId>('female')
+  const [gender] = useState<GenderId>('female')
   const [costumeGroup, setCostumeGroup] = useState<CostumeGroupId>('ethnic')
   const [costumeStyle, setCostumeStyle] = useState('ethnic-miao')
   const [paintingStyle, setPaintingStyle] = useState(paintingStyles[0].id)
@@ -778,20 +863,19 @@ function App() {
     setPreviewImageUrl('')
   }
 
-  function handleBubbleClick(item: (typeof inspirationBubbles)[number]) {
+  function handleBubbleClick(item: InspirationBubble) {
     if (!item.mode) {
       startNonCreativeChat()
       return
     }
-    if (item.id === 'costume-main' || item.id === 'costume-male') {
-      setCostumeGroup('ethnic')
-      setCostumeStyle('ethnic-miao')
-      setGender(item.id === 'costume-male' ? 'male' : 'female')
+
+    if (item.mode === 'costume') {
+      setCostumeGroup(item.costumeGroup || 'ethnic')
+      if (item.templateId) setCostumeStyle(item.templateId)
     }
-    if (item.id === 'costume-dynasty') {
-      setCostumeGroup('dynasty')
-      setCostumeStyle('dynasty-song')
-    }
+    if (item.mode === 'food' && item.templateId) setFoodShowcase(item.templateId)
+    if (item.mode === 'painting' && item.templateId) setPaintingStyle(item.templateId)
+
     setMode(item.mode)
     setView('home')
   }
@@ -1209,7 +1293,7 @@ function HomeView({
   mode: ModeId
   selectedTemplate?: TemplateItem
   templates: TemplateItem[]
-  onBubbleClick: (item: (typeof inspirationBubbles)[number]) => void
+  onBubbleClick: (item: InspirationBubble) => void
   onChooseTemplate: (id: string) => void
   onOpenLibrary: () => void
   onOpenTemplate: (template: TemplateItem) => void
@@ -1221,7 +1305,12 @@ function HomeView({
   function renderBubble(item: (typeof inspirationBubbles)[number]) {
     const Icon = item.icon
     return (
-      <button key={item.id} type="button" onClick={() => onBubbleClick(item)} className={item.mode === mode ? 'selected' : ''}>
+      <button
+        key={item.id}
+        type="button"
+        onClick={() => onBubbleClick(item)}
+        className={item.mode === mode && item.templateId === selectedTemplate?.id ? 'selected' : ''}
+      >
         <Icon size={16} />
         {item.label}
       </button>
@@ -1248,7 +1337,7 @@ function HomeView({
 
       <div
         className="bubble-row"
-        aria-label="灵感气泡"
+        aria-label="玩法快捷词条"
         onWheel={(event) => {
           if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
           event.preventDefault()
@@ -2667,7 +2756,7 @@ function CreationPanel({
               aria-label={`选择${activeMode.short}样例图${index + 1}`}
               onClick={() => onSelectSample(sample)}
             >
-              <img src={sample.imageUrl} alt={sample.title} />
+              <img src={sample.thumbnailUrl} alt={sample.title} width={240} height={240} decoding="async" />
               {sample.id === selectedSampleId && <CheckBadge />}
             </button>
           ))}

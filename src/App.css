@@ -3475,10 +3475,10 @@ button:disabled {
 
 .view-home .bubble-row {
   display: flex;
-  height: 88px;
+  height: 72px;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
   margin-top: 8px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -3496,9 +3496,9 @@ button:disabled {
 .bubble-track {
   display: flex;
   width: max-content;
-  height: 40px;
-  flex: 0 0 40px;
-  gap: 10px;
+  height: 33px;
+  flex: 0 0 33px;
+  gap: 8px;
 }
 
 .bubble-track-top {
@@ -3510,10 +3510,23 @@ button:disabled {
 }
 
 .view-home .bubble-row button {
-  min-height: 40px;
+  min-height: 33px;
   flex: 0 0 auto;
-  border-radius: 20px;
-  padding: 0 11px;
+  border-radius: 17px;
+  padding: 0 10px;
+  font-size: 11px;
+  scroll-snap-align: start;
+}
+
+.view-home .bubble-row button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.view-home .bubble-row button.selected {
+  border-color: #a9c4ff;
+  color: #2f6ff2;
+  background: #f3f7ff;
 }
 
 .view-home .template-section {
