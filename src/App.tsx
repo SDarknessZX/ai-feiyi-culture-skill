@@ -246,7 +246,6 @@ type InspirationBubble = {
   label: string
   mode: ModeId | null
   templateId?: string
-  costumeGroup?: CostumeGroupId
   icon: typeof MessageCircle
 }
 
@@ -257,7 +256,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '邂逅银饰璀璨的苗族风情',
     mode: 'costume',
     templateId: 'ethnic-miao',
-    costumeGroup: 'ethnic',
     icon: Sparkles,
   },
   {
@@ -265,7 +263,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '体验热情似火的彝族风情',
     mode: 'costume',
     templateId: 'ethnic-yi',
-    costumeGroup: 'ethnic',
     icon: Sparkles,
   },
   {
@@ -273,7 +270,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '聆听侗族鼓楼下的悠扬歌声',
     mode: 'costume',
     templateId: 'ethnic-dong',
-    costumeGroup: 'ethnic',
     icon: Wand2,
   },
   {
@@ -281,7 +277,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '感受雪域圣洁的藏族风情',
     mode: 'costume',
     templateId: 'ethnic-zang',
-    costumeGroup: 'ethnic',
     icon: Sparkles,
   },
   {
@@ -289,7 +284,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '戴上花帽共舞维吾尔风情',
     mode: 'costume',
     templateId: 'ethnic-uyghur',
-    costumeGroup: 'ethnic',
     icon: Wand2,
   },
   {
@@ -297,7 +291,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '奔赴辽阔豪迈的蒙古草原',
     mode: 'costume',
     templateId: 'ethnic-mongol',
-    costumeGroup: 'ethnic',
     icon: Sparkles,
   },
   {
@@ -305,7 +298,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '一秒穿越宋代雅韵',
     mode: 'costume',
     templateId: 'dynasty-song',
-    costumeGroup: 'dynasty',
     icon: Wand2,
   },
   {
@@ -313,7 +305,6 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '化身敦煌飞天翩然起舞',
     mode: 'costume',
     templateId: 'dynasty-dunhuang',
-    costumeGroup: 'dynasty',
     icon: Wand2,
   },
   { id: 'food-noodle', label: '让长安臊子面萌动起来', mode: 'food', templateId: '臊子面', icon: Utensils },
@@ -388,7 +379,6 @@ function App() {
   const [mode, setMode] = useState<ModeId>('costume')
   const [chatMode, setChatMode] = useState<ModeId>('costume')
   const [gender] = useState<GenderId>('female')
-  const [costumeGroup, setCostumeGroup] = useState<CostumeGroupId>('ethnic')
   const [costumeStyle, setCostumeStyle] = useState('ethnic-miao')
   const [paintingStyle, setPaintingStyle] = useState(paintingStyles[0].id)
   const [foodShowcase, setFoodShowcase] = useState('茶点')
@@ -440,8 +430,7 @@ function App() {
   const returnToCreationPanelRef = useRef(false)
 
   const activeMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode])
-  const costumeOptions = costumeGroup === 'ethnic' ? templates.ethnic : templates.dynasty
-  const visibleTemplates = useMemo(() => getVisibleTemplates(mode, costumeOptions, templates), [costumeOptions, mode, templates])
+  const visibleTemplates = useMemo(() => getVisibleTemplates(mode, templates), [mode, templates])
   const selectedTemplate = useMemo(() => {
     const selectedId = mode === 'costume' ? costumeStyle : mode === 'food' ? foodShowcase : paintingStyle
     return visibleTemplates.find((item) => item.id === selectedId) || visibleTemplates[0]
@@ -870,7 +859,6 @@ function App() {
     }
 
     if (item.mode === 'costume') {
-      setCostumeGroup(item.costumeGroup || 'ethnic')
       if (item.templateId) setCostumeStyle(item.templateId)
     }
     if (item.mode === 'food' && item.templateId) setFoodShowcase(item.templateId)
@@ -2842,9 +2830,9 @@ function InfoModal({ onClose }: { onClose: () => void }) {
   )
 }
 
-function getVisibleTemplates(mode: ModeId, costumeOptions: CostumeOption[], templates: TemplateData): TemplateItem[] {
+function getVisibleTemplates(mode: ModeId, templates: TemplateData): TemplateItem[] {
   if (mode === 'costume') {
-    return costumeOptions.map(({ id, title, imageUrl, videoUrl }) => ({
+    return [...templates.ethnic, ...templates.dynasty].map(({ id, title, imageUrl, videoUrl }) => ({
       id,
       title,
       imageUrl: imageUrl || fallbackTemplateImage,
