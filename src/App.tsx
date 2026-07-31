@@ -159,7 +159,6 @@ const usageAcceptedStorageKey = 'ai-yitu-zhenying-usage-accepted-202605'
 const mediaPermissionStorageKey = 'ai-yitu-zhenying-media-permission'
 const cameraPermissionStorageKey = 'ai-yitu-zhenying-camera-permission'
 const galleryPermissionStorageKey = 'ai-yitu-zhenying-gallery-permission'
-const loginStorageKey = 'ai-yitu-zhenying-login'
 const miguSessionStorageKey = 'ai-yitu-zhenying-migu-session'
 const miguLoginPendingKey = 'ai-yitu-zhenying-migu-login-pending'
 // btoken 官方有效期 1 小时，这里留一点余量提前判过期，避免临界点上用过期 token 发请求
@@ -387,14 +386,15 @@ function clearPendingTask(mode: ModeId) {
   window.localStorage.setItem(pendingStorageKey, JSON.stringify(pending))
 }
 
-type MiguSession = { btoken: string; vuid: string; obtainedAt: number }
+type MiguSession = { btoken: string; vuid?: string; obtainedAt: number }
 
 function readMiguSession(): MiguSession | null {
   try {
     const raw = window.localStorage.getItem(miguSessionStorageKey)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<MiguSession>
-    if (!parsed?.btoken || !parsed?.vuid || !parsed?.obtainedAt) return null
+    // 文档以 btoken 作为登录成功凭据；vuid 有则使用，没有也不能把成功登录误判成失败。
+    if (!parsed?.btoken || !parsed?.obtainedAt) return null
     return parsed as MiguSession
   } catch {
     return null
@@ -429,9 +429,9 @@ function App() {
   const [acceptedAgreement, setAcceptedAgreement] = useState(() => window.localStorage.getItem(usageAcceptedStorageKey) === 'true')
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
     const search = new URLSearchParams(window.location.search)
-    if (search.get('btoken') && search.get('vuid')) return true
+    if (search.get('btoken')) return true
     if (hasValidMiguSession()) return true
-    return Boolean(search.get('token')) || window.localStorage.getItem(loginStorageKey) === 'true'
+    return false
   })
   const [tokenGatingEnabled, setTokenGatingEnabled] = useState(false)
   const [tokenRemain, setTokenRemain] = useState<TokenRemainInfo | null>(null)
@@ -586,10 +586,6 @@ function App() {
     window.localStorage.setItem(galleryPermissionStorageKey, String(galleryPermissionGranted))
   }, [galleryPermissionGranted])
 
-  useEffect(() => {
-    window.localStorage.setItem(loginStorageKey, String(isLoggedIn))
-  }, [isLoggedIn])
-
   // 咪咕登录回调：cToken 由服务端调接口现取现用，不会出现在我们的 URL 里，
   // 这里只处理登录回调带回来的 btoken+vuid。没有 btoken 就是登录失败——用 sessionStorage
   // 标记"刚发起过登录跳转"，回来后据此判断成功/失败。
@@ -603,11 +599,14 @@ function App() {
     if (loginWasPending) {
       window.sessionStorage.removeItem(miguLoginPendingKey)
     }
-    if (btoken && vuid) {
-      window.localStorage.setItem(miguSessionStorageKey, JSON.stringify({ btoken, vuid, obtainedAt: Date.now() }))
+    if (btoken) {
+      window.localStorage.setItem(
+        miguSessionStorageKey,
+        JSON.stringify({ btoken, ...(vuid ? { vuid } : {}), obtainedAt: Date.now() }),
+      )
       setIsLoggedIn(true)
       if (loginWasPending) {
-        trackAmberLogin('success', vuid)
+        trackAmberLogin('success', vuid || undefined)
         trackQingyuanUserLogin('success', { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram })
       }
     } else if (loginWasPending) {
@@ -886,18 +885,10 @@ function App() {
         window.location.href = data.url
         return
       }
+      setToast(data.message || '无法获取咪咕登录地址，请稍后重试')
     } catch {
-      // 拿登录地址失败，退回本地演示登录，不阻断使用
+      setToast('无法连接登录服务，请稍后重试')
     }
-
-    // 咪咕渠道登录未配置完整，或本地直接访问调试时，走本地演示登录
-    setIsLoggedIn(true)
-    setShowLoginDialog(false)
-    if (!acceptedAgreement) {
-      window.setTimeout(() => setShowUsageNotice(true), 120)
-      return
-    }
-    openMediaSourceChooser()
   }
 
   async function openUsageDetail() {
@@ -1504,7 +1495,7 @@ function App() {
         <div className="topbar-actions">
           <button className="credit-badge" type="button" onClick={() => void openUsageDetail()} aria-label="查看分贝明细">
             <Sparkles size={13} />
-            {tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? 999}
+            {tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? '--'}
           </button>
           <button className="works-pill" type="button" onClick={() => setView(view === 'library' ? 'home' : 'library')}>
             我的作品
