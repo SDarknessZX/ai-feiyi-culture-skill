@@ -5,6 +5,57 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI非遗文化skill</title>
+    <!-- Amber Web SDK 异步引入（参考 Amber_Web_SDK 集成手册 3.2.1.1），必须放在 head 里尽早执行 -->
+    <script type="application/javascript">
+      var _mgds = _mgds || [];
+      window._mgds = _mgds;
+      (function () {
+        window.amberDataStore = window.amberDataStore || [];
+        window._amberEventTrack ||
+          (window._amberEventTrack = function (id, data) {
+            if (window.amberDataStore.length < 1000) {
+              window.amberDataStore.push({ ID: id, POP: data });
+            }
+          });
+        window._amberTrack ||
+          (window._amberTrack = function (id, data) {
+            if (Array.isArray(id)) {
+              id.forEach(function (v) {
+                window._amberEventTrack(v.ID, v.POP);
+              });
+            } else if (typeof id === 'string') {
+              window._amberEventTrack(id, data);
+            }
+          });
+        window.AmberWebSdk ||
+          (window.AmberWebSdk = {
+            _amberTrack: window._amberTrack,
+            addUDID: function (id) {
+              window.AmberWebSdk._udid = id;
+            },
+            setExtra: function (ext) {
+              window.AmberWebSdk._extra = ext;
+            },
+          });
+        var etm = 1 * Date.now();
+        _mgds.push(['_enterTime', etm]);
+        _mgds.push(['_accountId', '%VITE_AMBER_ACCOUNT_ID%']);
+        _mgds.push(['_trackSwitch', '01']);
+        _mgds.push(['_isInBrowser', true]);
+        _mgds.push(['_inAppIsUpload', false]);
+        // 权益使用页要求走清源行动共享通道：vds.src 换成 /xk/ 变体，并配置 _uploadUrl 上报到 qyWebData.html，
+        // 其他配置（_accountId 等）保持不变——文档原话“其他配置均无需变更”
+        _mgds.push(['_uploadUrl', '%VITE_AMBER_UPLOAD_URL%']);
+        (function () {
+          var vds = document.createElement('script');
+          vds.type = 'text/javascript';
+          vds.async = true;
+          vds.src = 'https://ambersdk.migu.cn/uemjs/xk/amber-web-sdk-min.js';
+          var s = document.getElementsByTagName('script')[0];
+          s.parentNode.insertBefore(vds, s);
+        })();
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

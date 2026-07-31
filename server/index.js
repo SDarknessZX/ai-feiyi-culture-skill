@@ -23,6 +23,20 @@ import {
   queryVideoGenerationTask,
   submitImageToVideoTask,
 } from './providers/arkVideo.js'
+import { checkContent, getContentAuditConfigReport, handleAuditCallback } from './providers/contentAudit.js'
+import {
+  buildLoginRedirectUrl,
+  buildTaskIdRedirectUrl,
+  buildUsageDetailUrl,
+  decryptMiguMsisdn,
+  getMiguAigcConfigReport,
+  getModelValueForMode,
+  isTokenGatingEnabled,
+  preDeductToken,
+  queryTokenRemainCount,
+  reportInteraction,
+  reportTokenResult,
+} from './providers/miguAigc.js'
 import { cacheGeneratedVideo } from './providers/generatedVideoStorage.js'
 import { archiveGeneratedVideo, ensureArchivedVideoPoster } from './providers/videoArchive.js'
 import { createCompliantVideoBuffer, getVideoComplianceConfigReport } from './providers/videoCompliance.js'
@@ -88,10 +102,9 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref()
 
-async function runCreateJob({ jobId, mode, gender, style, file }) {
+async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
   try {
-    updateJob(jobId, { status: 'running', message: '正在上传图片素材...' })
-    const imageUrl = await uploadFileToTos(file)
+    updateJob(jobId, { status: 'running' })
 
     if (mode === 'food') {
       updateJob(jobId, { message: '正在识别美食并生成专属提示词...' })
@@ -158,6 +171,56 @@ function rateLimitCreate(request, response, next) {
   next()
 }
 
+// costume/painting 模式需要校验模板并取出生成提示词；food 模式没有模板，直接放行。
+// /api/create 和 /api/create/start 都要做这个校验，抽成公共函数避免逻辑漂移。
+function resolveStyle(mode, template) {
+  if (mode === 'costume') {
+    const style = findCostumeStyle(template)
+    if (!style) {
+      return { status: 404, error: { message: '未找到所选服饰模板，请刷新页面后重新选择。' } }
+    }
+    if (!style.prompt) {
+      return {
+        status: 400,
+        error: { templateTitle: style.title, message: `“${style.title}”暂未配置生成提示词，请先选择已有提示词的服饰模板。` },
+      }
+    }
+    return { style, templateTitle: style.title }
+  }
+  if (mode === 'painting') {
+    const style = findPaintingStyle(template)
+    if (!style) {
+      return { status: 404, error: { message: '未找到所选画作模板，请刷新页面后重新选择。' } }
+    }
+    if (!style.prompt) {
+      return {
+        status: 400,
+        error: { templateTitle: style.title, message: `“${style.title}”暂未配置生成提示词，请检查 prompts/painting/paint.txt。` },
+      }
+    }
+    return { style, templateTitle: style.title }
+  }
+  return { style: null, templateTitle: 'AI识别美食' }
+}
+
+// Token 计费结果上报：一个 job 最多上报一次，成功/失败都要报，否则用户的 Token 权益会一直卡在预扣状态
+async function reportTokenOutcomeIfNeeded(jobId, result, { inputImageUrl, videoUrl }) {
+  const job = jobId.startsWith('job-') ? jobs.get(jobId) : null
+  if (!job?.miguTaskId || job.tokenReported) return
+  updateJob(jobId, { tokenReported: true })
+  try {
+    await reportTokenResult({
+      otoken: job.miguOtoken,
+      taskId: job.miguTaskId,
+      result,
+      inputContents: [{ contentType: 'image', content: inputImageUrl || job.inputImageUrl || '' }],
+      ...(result && videoUrl ? { finalResults: [{ contentType: 'video', content: videoUrl }] } : {}),
+    })
+  } catch (error) {
+    console.error(`[migu] Token 使用结果上报失败（jobId=${jobId}, miguTaskId=${job.miguTaskId}）：`, error)
+  }
+}
+
 function publicCostume(template) {
   return {
     id: template.id,
@@ -208,15 +271,103 @@ app.get('/api/health', (_request, response) => {
       compliance: getVideoComplianceConfigReport(),
       faceDetection: getFaceDetectionConfigReport(),
       tos: getTosConfigReport(),
+      contentAudit: getContentAuditConfigReport(),
+      miguAigc: getMiguAigcConfigReport(),
     },
   })
 })
+app.get('/api/migu/login-url', async (request, response) => {
+  try {
+    const url = await buildLoginRedirectUrl()
+    response.json({ url })
+  } catch (error) {
+    response.status(400).json({ message: error instanceof Error ? error.message : '无法生成登录地址。' })
+  }
+})
+app.get('/api/migu/usage-detail-url', (request, response) => {
+  const token = String(request.query.token || '').trim()
+  const cfrom = request.query.cfrom ? String(request.query.cfrom).trim() : undefined
+  try {
+    const url = buildUsageDetailUrl({ token, cfrom })
+    response.json({ url })
+  } catch (error) {
+    response.status(400).json({ message: error instanceof Error ? error.message : '无法生成分贝明细页地址。' })
+  }
+})
+app.get('/api/migu/token-gating', (_request, response) => {
+  response.json({ enabled: isTokenGatingEnabled() })
+})
+app.get('/api/migu/task-id-url', (request, response) => {
+  const btoken = String(request.query.btoken || '').trim()
+  const mode = String(request.query.mode || '').trim()
+  const modelValue = getModelValueForMode(mode)
+  if (!modelValue) {
+    return response.status(400).json({ message: `不支持的玩法模态：${mode || '（空）'}` })
+  }
+  try {
+    const url = buildTaskIdRedirectUrl({ btoken, modelValue, contentType: 'video' })
+    response.json({ url })
+  } catch (error) {
+    response.status(400).json({ message: error instanceof Error ? error.message : '无法生成获取 taskId 页面地址。' })
+  }
+})
+app.get('/api/migu/token/remain', async (request, response) => {
+  const otoken = String(request.query.otoken || '').trim()
+  const mode = String(request.query.mode || '').trim()
+  const modelValue = getModelValueForMode(mode)
+  if (!modelValue) {
+    return response.status(400).json({ message: `不支持的玩法模态：${mode || '（空）'}` })
+  }
+  try {
+    const data = await queryTokenRemainCount({ otoken, modelValue })
+    response.json(data)
+  } catch (error) {
+    response.status(502).json({ message: error instanceof Error ? error.message : 'Token 权益查询失败。' })
+  }
+})
+const interactSchema = z.object({
+  otoken: z.string().trim().min(1).max(256),
+  ans: z.string().trim().min(1).max(2000),
+  ask: z.string().trim().max(2000).optional().default(''),
+  ansBy: z.enum(['popup', 'input', 'shortcut']).optional().default('input'),
+})
+app.post('/api/migu/token/interact', async (request, response) => {
+  const parsed = interactSchema.safeParse(request.body)
+  if (!parsed.success) {
+    return response.status(400).json({ message: '请求参数不正确。' })
+  }
+  try {
+    await reportInteraction(parsed.data)
+    response.json({ ok: true })
+  } catch (error) {
+    // 这个上报失败不应该打断用户的聊天体验，记日志就好
+    console.error('[migu] 用户交互上报失败：', error)
+    response.json({ ok: false })
+  }
+})
+// 《数智人和AI视频彩铃包月》1.4.4 订购/退订通知接口——包月开通/暂停/恢复/退订时咪咕会回调这里。
+// msisdn 是 AES-256-ECB 加密过的手机号，密钥用的是登录接口那个"签名密钥"（1.4.3.8 原文写明）。
+app.post('/api/migu/subscription-notify', async (request, response) => {
+  const { msisdn, ...rest } = request.body || {}
+  let maskedMsisdn = msisdn
+  if (msisdn) {
+    try {
+      const decrypted = decryptMiguMsisdn(msisdn)
+      maskedMsisdn = decrypted.length >= 7 ? `${decrypted.slice(0, 3)}****${decrypted.slice(-4)}` : '(解密成功，长度异常)'
+    } catch (error) {
+      maskedMsisdn = `(解密失败：${error instanceof Error ? error.message : String(error)})`
+    }
+  }
+  console.log('咪咕订购/退订通知收到：', JSON.stringify({ ...rest, msisdn: maskedMsisdn }, null, 2))
+  response.json({ code: '000000', info: 'success' })
+})
 app.post('/api/compliance/callback', async (request, response) => {
   console.log('机审回调收到：', JSON.stringify(request.body, null, 2))
+  handleAuditCallback(request.body)
 
   response.json({
-    ok: true,
-    message: 'callback received',
+    code: '000000',
+    info: 'success',
   })
 })
 app.get('/api/templates', (_request, response) => {
@@ -296,6 +447,7 @@ app.post('/api/video-poster', async (request, response) => {
   }
 })
 
+// 直接创建任务（不经过咪咕 Token 预扣）——本地/未开启 Token 计费网关时的默认路径
 app.post('/api/create', rateLimitCreate, upload.single('image'), async (request, response) => {
   const parsed = createSchema.safeParse(request.body)
   if (!parsed.success) {
@@ -329,54 +481,192 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     }
   }
 
-  let style = null
-  let templateTitle = 'AI识别美食'
-
-  if (input.mode === 'costume') {
-    style = findCostumeStyle(input.template)
-    if (!style) {
-      await cleanupUpload(request)
-      return response.status(404).json({
-        status: 'failed',
-        mode: input.mode,
-        message: '未找到所选服饰模板，请刷新页面后重新选择。',
-      })
-    }
-    if (!style.prompt) {
-      await cleanupUpload(request)
-      return response.status(400).json({
-        status: 'failed',
-        mode: input.mode,
-        templateTitle: style.title,
-        message: `“${style.title}”暂未配置生成提示词，请先选择已有提示词的服饰模板。`,
-      })
-    }
-    templateTitle = style.title
-  }
-
-  if (input.mode === 'painting') {
-    style = findPaintingStyle(input.template)
-    if (!style) {
-      await cleanupUpload(request)
-      return response.status(404).json({
-        status: 'failed',
-        mode: input.mode,
-        message: '未找到所选画作模板，请刷新页面后重新选择。',
-      })
-    }
-    if (!style.prompt) {
-      await cleanupUpload(request)
-      return response.status(400).json({
-        status: 'failed',
-        mode: input.mode,
-        templateTitle: style.title,
-        message: `“${style.title}”暂未配置生成提示词，请检查 prompts/painting/paint.txt。`,
-      })
-    }
-    templateTitle = style.title
+  const styleCheck = resolveStyle(input.mode, input.template)
+  if (styleCheck.error) {
+    await cleanupUpload(request)
+    return response.status(styleCheck.status).json({ status: 'failed', mode: input.mode, ...styleCheck.error })
   }
 
   const jobId = `job-${crypto.randomUUID()}`
+
+  let imageUrl
+  try {
+    imageUrl = await uploadFileToTos(request.file)
+  } catch (error) {
+    await cleanupUpload(request)
+    return response.status(502).json({
+      status: 'failed',
+      mode: input.mode,
+      message: error instanceof Error ? error.message : '图片上传失败，请稍后重试。',
+    })
+  }
+
+  // 机审：用户输入的图片（换装照片/年画线稿等）过审后才允许发起创作任务
+  const inputAudit = await checkContent({
+    kind: 'picture',
+    content: imageUrl,
+    contentId: jobId,
+    description: `${input.mode} 创作输入图片`,
+  })
+  if (!inputAudit.passed) {
+    await cleanupUpload(request)
+    return response.status(422).json({
+      status: 'failed',
+      mode: input.mode,
+      message: '您的输入不适合展示哦，请修改后重试',
+    })
+  }
+
+  jobs.set(jobId, {
+    status: 'queued',
+    mode: input.mode,
+    templateTitle: styleCheck.templateTitle,
+    arkTaskId: '',
+    message: '任务已受理，正在准备素材...',
+    updatedAt: Date.now(),
+    inputImageUrl: imageUrl,
+  })
+  // 上传的临时文件交给后台任务用完再删，这里不能先清理
+  void runCreateJob({
+    jobId,
+    mode: input.mode,
+    gender: input.gender,
+    style: styleCheck.style,
+    file: request.file,
+    imageUrl,
+  })
+
+  return response.json({
+    taskId: jobId,
+    status: 'queued',
+    mode: input.mode,
+    templateTitle: styleCheck.templateTitle,
+    message: '任务已受理，正在后台处理，请稍候。',
+  })
+})
+
+// Token 计费网关开启时的创作流程分两步：
+// 1) /api/create/prepare 先做人脸检测/模板校验/上传/输入机审，拿到 imageUrl 后前端才整页跳转去咪咕拿 taskId
+// 2) 跳转回来后调 /api/create/start，带上 taskId 做 Token 预扣，通过了才真正建任务
+app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (request, response) => {
+  const parsed = createSchema.safeParse(request.body)
+  if (!parsed.success) {
+    await cleanupUpload(request)
+    return response.status(400).json({ status: 'failed', message: '请求参数不正确。' })
+  }
+
+  const input = parsed.data
+  if (!request.file) {
+    return response.status(400).json({ status: 'failed', message: '请先上传一张图片。' })
+  }
+
+  if (input.mode === 'costume') {
+    try {
+      const faceResult = await detectFaces(request.file)
+      if (!faceResult.hasFace) {
+        await cleanupUpload(request)
+        return response.status(422).json({
+          status: 'failed',
+          mode: input.mode,
+          message: '未检测到清晰人脸，请重新上传后再使用民族变装。',
+        })
+      }
+    } catch (error) {
+      await cleanupUpload(request)
+      return response.status(503).json({
+        status: 'failed',
+        mode: input.mode,
+        message: error instanceof Error ? error.message : '人脸检测服务暂不可用，请稍后重试。',
+      })
+    }
+  }
+
+  const styleCheck = resolveStyle(input.mode, input.template)
+  if (styleCheck.error) {
+    await cleanupUpload(request)
+    return response.status(styleCheck.status).json({ status: 'failed', mode: input.mode, ...styleCheck.error })
+  }
+
+  let imageUrl
+  try {
+    imageUrl = await uploadFileToTos(request.file)
+  } catch (error) {
+    await cleanupUpload(request)
+    return response.status(502).json({
+      status: 'failed',
+      mode: input.mode,
+      message: error instanceof Error ? error.message : '图片上传失败，请稍后重试。',
+    })
+  }
+  await cleanupUpload(request)
+
+  const inputAudit = await checkContent({
+    kind: 'picture',
+    content: imageUrl,
+    contentId: `prepare-${crypto.randomUUID()}`,
+    description: `${input.mode} 创作输入图片`,
+  })
+  if (!inputAudit.passed) {
+    return response.status(422).json({
+      status: 'failed',
+      mode: input.mode,
+      message: '您的输入不适合展示哦，请修改后重试',
+    })
+  }
+
+  return response.json({
+    status: 'ready',
+    mode: input.mode,
+    template: input.template,
+    gender: input.gender,
+    templateTitle: styleCheck.templateTitle,
+    imageUrl,
+  })
+})
+
+const createStartSchema = z.object({
+  mode: z.enum(['costume', 'food', 'painting']),
+  template: z.string().optional().default(''),
+  gender: z.enum(['female', 'male']).optional().default('female'),
+  templateTitle: z.string().optional().default(''),
+  imageUrl: z.string().trim().min(1).max(2048),
+  taskId: z.string().trim().min(1).max(128),
+  otoken: z.string().trim().min(1).max(256),
+})
+
+app.post('/api/create/start', rateLimitCreate, async (request, response) => {
+  const parsed = createStartSchema.safeParse(request.body)
+  if (!parsed.success) {
+    return response.status(400).json({ status: 'failed', message: '请求参数不正确。' })
+  }
+  const input = parsed.data
+
+  const styleCheck = resolveStyle(input.mode, input.template)
+  if (styleCheck.error) {
+    return response.status(styleCheck.status).json({ status: 'failed', mode: input.mode, ...styleCheck.error })
+  }
+
+  const modelValue = getModelValueForMode(input.mode)
+  if (!modelValue) {
+    return response.status(500).json({
+      status: 'failed',
+      mode: input.mode,
+      message: `未配置「${input.mode}」对应的咪咕模态值（modelValue），请检查 .env。`,
+    })
+  }
+
+  try {
+    await preDeductToken({ otoken: input.otoken, taskId: input.taskId, contentType: 'video', modelValue })
+  } catch (error) {
+    return response.status(402).json({
+      status: 'failed',
+      mode: input.mode,
+      message: error instanceof Error ? error.message : 'Token 权益不足或校验失败，请稍后重试。',
+    })
+  }
+
+  const jobId = `job-${crypto.randomUUID()}`
+  const templateTitle = input.templateTitle || styleCheck.templateTitle
   jobs.set(jobId, {
     status: 'queued',
     mode: input.mode,
@@ -384,14 +674,18 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     arkTaskId: '',
     message: '任务已受理，正在准备素材...',
     updatedAt: Date.now(),
+    inputImageUrl: input.imageUrl,
+    miguTaskId: input.taskId,
+    miguOtoken: input.otoken,
+    tokenReported: false,
   })
-  // 上传的临时文件交给后台任务用完再删，这里不能先清理
   void runCreateJob({
     jobId,
     mode: input.mode,
     gender: input.gender,
-    style,
-    file: request.file,
+    style: styleCheck.style,
+    file: null,
+    imageUrl: input.imageUrl,
   })
 
   return response.json({
@@ -459,6 +753,24 @@ app.get('/api/tasks/:taskId', async (request, response) => {
 
     const data = await queryVideoGenerationTask(arkTaskId)
     if (data.status === 'succeeded' && data.videoUrl) {
+      // 机审：模型生成的视频过审后才允许展示给用户预览，未过审直接判定任务失败
+      const outputAudit = await checkContent({
+        kind: 'video',
+        content: data.videoUrl,
+        contentId: taskId,
+        description: `${mode} 生成结果视频`,
+      })
+      if (!outputAudit.passed) {
+        await reportTokenOutcomeIfNeeded(taskId, false, {})
+        return response.json({
+          taskId,
+          status: 'failed',
+          mode,
+          message: '生成结果未通过内容审核，请调整素材后重新生成。',
+          ...(templateTitle ? { templateTitle } : {}),
+        })
+      }
+
       const compliantVideoBuffer = await createCompliantVideoBuffer({
         sourceUrl: data.videoUrl,
         taskId,
@@ -484,10 +796,14 @@ app.get('/api/tasks/:taskId', async (request, response) => {
           )
         }
       }
+      await reportTokenOutcomeIfNeeded(taskId, true, { videoUrl: data.videoUrl })
+    } else if (data.status === 'failed') {
+      await reportTokenOutcomeIfNeeded(taskId, false, {})
     }
     return response.json({ ...data, taskId, mode, ...(templateTitle ? { templateTitle } : {}) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to query task.'
+    await reportTokenOutcomeIfNeeded(taskId, false, {})
     return response.status(500).json({
       taskId,
       status: 'failed',

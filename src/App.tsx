@@ -31,6 +31,8 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
+import { trackAmberCompleteTask, trackAmberEnter, trackAmberInteract, trackAmberLogin, trackAmberSubmitTask } from './amber'
+import { advanceQingyuanPageSeq, trackQingyuanPageLoad, trackQingyuanPageStay, trackQingyuanTraceLog, trackQingyuanUserLogin } from './qingyuan'
 import './App.css'
 
 type ModeId = 'costume' | 'food' | 'painting'
@@ -58,6 +60,23 @@ type ModeDraft = {
   result: CreateResult | null
   busy: boolean
   polling: boolean
+}
+
+// Token 计费网关开启时，整页跳转去咪咕拿 taskId 之前，先把这次创作请求存起来，跳转回来后续用
+type PendingCreation = {
+  mode: ModeId
+  template: string
+  gender: GenderId
+  templateTitle: string
+  imageUrl: string
+}
+
+type TokenRemainInfo = {
+  status?: number
+  rightsCount?: number
+  experienceCount?: number
+  consumePointsCount?: number
+  availablePointsCount?: number
 }
 
 type TemplateItem = {
@@ -141,6 +160,12 @@ const mediaPermissionStorageKey = 'ai-yitu-zhenying-media-permission'
 const cameraPermissionStorageKey = 'ai-yitu-zhenying-camera-permission'
 const galleryPermissionStorageKey = 'ai-yitu-zhenying-gallery-permission'
 const loginStorageKey = 'ai-yitu-zhenying-login'
+const miguSessionStorageKey = 'ai-yitu-zhenying-migu-session'
+const miguLoginPendingKey = 'ai-yitu-zhenying-migu-login-pending'
+// btoken 官方有效期 1 小时，这里留一点余量提前判过期，避免临界点上用过期 token 发请求
+const miguSessionTtlMs = 55 * 60 * 1000
+const pendingCreationStorageKey = 'ai-yitu-zhenying-migu-pending-creation'
+const miguTaskIdPendingKey = 'ai-yitu-zhenying-migu-taskid-pending'
 const serviceProviderName = import.meta.env.VITE_SERVICE_PROVIDER_NAME?.trim() || '咪咕音乐有限公司'
 const privacyPolicyUrl =
   import.meta.env.VITE_PRIVACY_POLICY_URL?.trim() ||
@@ -362,6 +387,25 @@ function clearPendingTask(mode: ModeId) {
   window.localStorage.setItem(pendingStorageKey, JSON.stringify(pending))
 }
 
+type MiguSession = { btoken: string; vuid: string; obtainedAt: number }
+
+function readMiguSession(): MiguSession | null {
+  try {
+    const raw = window.localStorage.getItem(miguSessionStorageKey)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<MiguSession>
+    if (!parsed?.btoken || !parsed?.vuid || !parsed?.obtainedAt) return null
+    return parsed as MiguSession
+  } catch {
+    return null
+  }
+}
+
+function hasValidMiguSession(): boolean {
+  const session = readMiguSession()
+  return Boolean(session && Date.now() - session.obtainedAt < miguSessionTtlMs)
+}
+
 function createEmptyDraft(): ModeDraft {
   return {
     file: null,
@@ -385,8 +429,12 @@ function App() {
   const [acceptedAgreement, setAcceptedAgreement] = useState(() => window.localStorage.getItem(usageAcceptedStorageKey) === 'true')
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
     const search = new URLSearchParams(window.location.search)
+    if (search.get('btoken') && search.get('vuid')) return true
+    if (hasValidMiguSession()) return true
     return Boolean(search.get('token')) || window.localStorage.getItem(loginStorageKey) === 'true'
   })
+  const [tokenGatingEnabled, setTokenGatingEnabled] = useState(false)
+  const [tokenRemain, setTokenRemain] = useState<TokenRemainInfo | null>(null)
   const [showInfo, setShowInfo] = useState(false)
   const [showLoginDialog, setShowLoginDialog] = useState(false)
   const [showUsageNotice, setShowUsageNotice] = useState(false)
@@ -428,6 +476,8 @@ function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const resumeRef = useRef(false)
   const returnToCreationPanelRef = useRef(false)
+  // 咱们的 jobId -> 咪咕 taskId，创作完成事件上报要用，跨 pollTask 的多轮请求持续存在
+  const miguTaskIdByJobRef = useRef<Record<string, string>>({})
 
   const activeMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode])
   const visibleTemplates = useMemo(() => getVisibleTemplates(mode, templates), [mode, templates])
@@ -540,6 +590,72 @@ function App() {
     window.localStorage.setItem(loginStorageKey, String(isLoggedIn))
   }, [isLoggedIn])
 
+  // 咪咕登录回调：cToken 由服务端调接口现取现用，不会出现在我们的 URL 里，
+  // 这里只处理登录回调带回来的 btoken+vuid。没有 btoken 就是登录失败——用 sessionStorage
+  // 标记"刚发起过登录跳转"，回来后据此判断成功/失败。
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search)
+    const btoken = search.get('btoken')
+    const vuid = search.get('vuid')
+    const loginWasPending = window.sessionStorage.getItem(miguLoginPendingKey) === '1'
+    if (!btoken && !vuid && !loginWasPending) return
+
+    if (loginWasPending) {
+      window.sessionStorage.removeItem(miguLoginPendingKey)
+    }
+    if (btoken && vuid) {
+      window.localStorage.setItem(miguSessionStorageKey, JSON.stringify({ btoken, vuid, obtainedAt: Date.now() }))
+      setIsLoggedIn(true)
+      if (loginWasPending) {
+        trackAmberLogin('success', vuid)
+        trackQingyuanUserLogin('success', { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram })
+      }
+    } else if (loginWasPending) {
+      setToast('登录失败，请重试')
+      trackAmberLogin('fail')
+      trackQingyuanUserLogin('fail', { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram })
+    }
+
+    search.delete('btoken')
+    search.delete('vuid')
+    const nextQuery = search.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 从"获取 taskId 页面"跳转回来：URL 带 taskId（或失败态），配合 sessionStorage 里存的待提交创作请求续上流程
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search)
+    const taskId = search.get('taskId')
+    const taskIdWasPending = window.sessionStorage.getItem(miguTaskIdPendingKey) === '1'
+    if (!taskId && !taskIdWasPending) return
+
+    window.sessionStorage.removeItem(miguTaskIdPendingKey)
+    search.delete('taskId')
+    search.delete('resumeCode')
+    search.delete('code')
+    search.delete('info')
+    const nextQuery = search.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`)
+
+    const pendingRaw = window.sessionStorage.getItem(pendingCreationStorageKey)
+    window.sessionStorage.removeItem(pendingCreationStorageKey)
+    const session = readMiguSession()
+
+    if (!taskId || !pendingRaw || !session?.btoken) {
+      if (taskIdWasPending) setToast('获取创作资格失败，请重试')
+      return
+    }
+
+    try {
+      const pending = JSON.parse(pendingRaw) as PendingCreation
+      void resumeTokenGatedCreation(taskId, session.btoken, pending)
+    } catch {
+      setToast('创作请求已过期，请重新发起')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     if (!toast) return
     const timer = window.setTimeout(() => setToast(''), 2200)
@@ -592,6 +708,84 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    trackAmberEnter(readMiguSession()?.vuid)
+
+    const loadTime = typeof performance !== 'undefined' ? performance.now() : 0
+    const pageContext = { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram }
+    trackQingyuanPageLoad(loadTime, pageContext)
+
+    const enteredAt = Date.now()
+    let stayReported = false
+    const reportStay = () => {
+      if (stayReported) return
+      stayReported = true
+      trackQingyuanPageStay(Date.now() - enteredAt, pageContext)
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') reportStay()
+    }
+    window.addEventListener('pagehide', reportStay)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('pagehide', reportStay)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 用 view 切换近似表示 SPA 内的"页面跳转"，驱动 qingyuan 埋点的 pageSeq 累加
+  const previousViewRef = useRef(view)
+  useEffect(() => {
+    if (previousViewRef.current !== view) {
+      advanceQingyuanPageSeq()
+      previousViewRef.current = view
+    }
+  }, [view])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch('/api/migu/token-gating')
+        const data = (await response.json()) as { enabled?: boolean }
+        if (!cancelled) setTokenGatingEnabled(Boolean(data.enabled))
+      } catch {
+        // 查询失败就当没开，创作走原来的直接创建流程
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Token 网关开启且已通过真实咪咕登录时，查询当前玩法的分贝余量，展示在顶部角标上
+  useEffect(() => {
+    if (!tokenGatingEnabled) {
+      setTokenRemain(null)
+      return
+    }
+    const session = readMiguSession()
+    if (!session?.btoken) {
+      setTokenRemain(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch(`/api/migu/token/remain?otoken=${encodeURIComponent(session.btoken)}&mode=${encodeURIComponent(mode)}`)
+        if (!response.ok) return
+        const data = (await response.json()) as TokenRemainInfo
+        if (!cancelled) setTokenRemain(data)
+      } catch {
+        // 保留上一次查到的值，不打断使用
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [tokenGatingEnabled, mode, isLoggedIn])
 
   function saveWork(nextResult: CreateResult) {
     const nextVideoUrl = nextResult.videoUrl || nextResult.previewUrl
@@ -681,7 +875,22 @@ function App() {
     setShowMediaSourceSheet(true)
   }
 
-  function confirmLogin() {
+  async function confirmLogin() {
+    try {
+      // cToken 由服务端现调接口现取（免鉴权登录），前端不需要也不应该自己持有它
+      const response = await fetch('/api/migu/login-url')
+      const data = (await response.json()) as { url?: string; message?: string }
+      if (response.ok && data.url) {
+        // 整页跳转到咪咕登录验证页，登录完成后咪咕会带 btoken/vuid 跳回本页
+        window.sessionStorage.setItem(miguLoginPendingKey, '1')
+        window.location.href = data.url
+        return
+      }
+    } catch {
+      // 拿登录地址失败，退回本地演示登录，不阻断使用
+    }
+
+    // 咪咕渠道登录未配置完整，或本地直接访问调试时，走本地演示登录
     setIsLoggedIn(true)
     setShowLoginDialog(false)
     if (!acceptedAgreement) {
@@ -689,6 +898,25 @@ function App() {
       return
     }
     openMediaSourceChooser()
+  }
+
+  async function openUsageDetail() {
+    const session = readMiguSession()
+    if (!session?.btoken) {
+      setToast('请先登录咪咕账号后查看')
+      return
+    }
+    try {
+      const response = await fetch(`/api/migu/usage-detail-url?token=${encodeURIComponent(session.btoken)}`)
+      const data = (await response.json()) as { url?: string; message?: string }
+      if (response.ok && data.url) {
+        window.open(data.url, '_blank', 'noopener,noreferrer')
+        return
+      }
+      setToast(data.message || '暂时无法打开使用明细')
+    } catch {
+      setToast('无法连接本地服务，请稍后重试')
+    }
   }
 
   function closeLoginDialog() {
@@ -878,9 +1106,24 @@ function App() {
     setView('chat')
   }
 
+  // 用户交互行为上报接口：现在聊天入口都是 chatTopics 里的固定预设文案（"快捷输入"），
+  // 属于文档里"安全的预设文本"，可以不经过机审直接上报；不阻塞聊天体验，失败就算了。
+  function reportChatInteraction(ans: string) {
+    if (!tokenGatingEnabled) return
+    const session = readMiguSession()
+    if (!session?.btoken) return
+    void fetch('/api/migu/token/interact', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ otoken: session.btoken, ans, ansBy: 'shortcut' }),
+    }).catch(() => {})
+  }
+
   async function sendChatMessage(message: string) {
     const trimmed = message.trim()
     if (!trimmed || chatBusy) return
+    trackAmberInteract(readMiguSession()?.vuid)
+    reportChatInteraction(trimmed)
     const stamp = Date.now()
     const loadingId = `assistant-${stamp}`
     setChatBusy(true)
@@ -936,6 +1179,173 @@ function App() {
     }, 0)
   }
 
+  function templateIdFor(targetMode: ModeId) {
+    if (targetMode === 'costume') return costumeStyle
+    if (targetMode === 'painting') return paintingStyle
+    return ''
+  }
+
+  // 处理 /api/create 或 /api/create/start 的响应：两条路径完成后的收尾逻辑完全一样
+  async function handleCreateApiResponse(targetMode: ModeId, response: Response) {
+    let data: CreateResult
+    try {
+      data = (await response.json()) as CreateResult
+    } catch {
+      data = {
+        status: 'failed',
+        mode: targetMode,
+        message: `服务返回了异常响应（HTTP ${response.status}），请稍后重试。`,
+      }
+    }
+    data = { ...data, mode: targetMode }
+    updateDraft(targetMode, { result: data })
+    saveWork(data)
+    setChatMode(targetMode)
+    setView('chat')
+    setChatMessages([
+      { id: `user-${Date.now()}`, role: 'user', text: `使用「${data.templateTitle || modeLabels[targetMode]}」发起创作` },
+    ])
+
+    if (response.ok && data.taskId && ['queued', 'running'].includes(data.status)) {
+      savePendingTask(targetMode, data)
+      void pollTask(data, targetMode)
+    }
+    return data
+  }
+
+  // Token 网关没开时的原始路径：一次请求直接建任务，不经过咪咕 taskId 页面
+  async function submitLegacyCreate(targetMode: ModeId, file: File) {
+    const formData = new FormData()
+    formData.append('image', file)
+    formData.append('mode', targetMode)
+    const template = templateIdFor(targetMode)
+    if (template) formData.append('template', template)
+    formData.append('gender', gender)
+
+    try {
+      const response = await fetch('/api/create', { method: 'POST', body: formData })
+      await handleCreateApiResponse(targetMode, response)
+    } catch {
+      updateDraft(targetMode, {
+        result: {
+          status: 'failed',
+          mode: targetMode,
+          message: '无法连接本地服务，请确认已经运行 npm run dev 后重试。',
+        },
+      })
+    } finally {
+      updateDraft(targetMode, { busy: false })
+    }
+  }
+
+  // Token 网关开着时：先上传+机审拿 imageUrl，存好待提交状态，再整页跳转去咪咕拿 taskId
+  async function beginTokenGatedCreation(targetMode: ModeId, file: File, btoken: string) {
+    const template = templateIdFor(targetMode)
+    const formData = new FormData()
+    formData.append('image', file)
+    formData.append('mode', targetMode)
+    if (template) formData.append('template', template)
+    formData.append('gender', gender)
+
+    try {
+      const prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
+      const prepared = (await prepareResponse.json()) as {
+        status?: string
+        message?: string
+        templateTitle?: string
+        imageUrl?: string
+      }
+      if (!prepareResponse.ok || prepared.status !== 'ready' || !prepared.imageUrl) {
+        updateDraft(targetMode, {
+          result: { status: 'failed', mode: targetMode, message: prepared.message || '素材准备失败，请稍后重试。' },
+        })
+        return
+      }
+
+      const pending: PendingCreation = {
+        mode: targetMode,
+        template,
+        gender,
+        templateTitle: prepared.templateTitle || modeLabels[targetMode],
+        imageUrl: prepared.imageUrl,
+      }
+      window.sessionStorage.setItem(pendingCreationStorageKey, JSON.stringify(pending))
+
+      const taskIdUrlResponse = await fetch(
+        `/api/migu/task-id-url?btoken=${encodeURIComponent(btoken)}&mode=${encodeURIComponent(targetMode)}`,
+      )
+      const taskIdUrlData = (await taskIdUrlResponse.json()) as { url?: string; message?: string }
+      if (!taskIdUrlResponse.ok || !taskIdUrlData.url) {
+        window.sessionStorage.removeItem(pendingCreationStorageKey)
+        updateDraft(targetMode, {
+          result: { status: 'failed', mode: targetMode, message: taskIdUrlData.message || '暂时无法发起创作，请稍后重试。' },
+        })
+        return
+      }
+
+      window.sessionStorage.setItem(miguTaskIdPendingKey, '1')
+      trackQingyuanTraceLog({
+        processId: 1,
+        processType: '2',
+        goodsId: templateIdFor(targetMode),
+        goodsName: pending.templateTitle,
+        isInMiguApp: miguEnv.isInMiguAPP,
+        isInMiniprogram: miguEnv.isInMiniprogram,
+      })
+      // 整页跳转到咪咕获取 taskId 页面，回来后由挂载时的 effect 接着走 resumeTokenGatedCreation
+      window.location.href = taskIdUrlData.url
+    } catch {
+      updateDraft(targetMode, {
+        result: { status: 'failed', mode: targetMode, message: '无法连接本地服务，请稍后重试。' },
+      })
+    }
+  }
+
+  // 从咪咕获取 taskId 页面跳转回来后续接创作：Token 预扣通过了才真正建任务
+  async function resumeTokenGatedCreation(miguTaskId: string, btoken: string, pending: PendingCreation) {
+    setMode(pending.mode)
+    updateDraft(pending.mode, { busy: true, result: null })
+    try {
+      const response = await fetch('/api/create/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          mode: pending.mode,
+          template: pending.template,
+          gender: pending.gender,
+          templateTitle: pending.templateTitle,
+          imageUrl: pending.imageUrl,
+          taskId: miguTaskId,
+          otoken: btoken,
+        }),
+      })
+      const data = await handleCreateApiResponse(pending.mode, response)
+      if (response.ok && data.taskId) {
+        miguTaskIdByJobRef.current[data.taskId] = miguTaskId
+        trackAmberSubmitTask(miguTaskId, pending.template, readMiguSession()?.vuid)
+      } else {
+        // Token 预扣减没通过，创作任务根本没建起来——直接算办理失败
+        trackQingyuanTraceLog({
+          processId: 2,
+          processType: '8',
+          orderId: miguTaskId,
+          goodsId: pending.template,
+          goodsName: pending.templateTitle,
+          resultCode: '1',
+          errorMessage: data.message,
+          isInMiguApp: miguEnv.isInMiguAPP,
+          isInMiniprogram: miguEnv.isInMiniprogram,
+        })
+      }
+    } catch {
+      updateDraft(pending.mode, {
+        result: { status: 'failed', mode: pending.mode, message: '无法连接本地服务，请稍后重试。' },
+      })
+    } finally {
+      updateDraft(pending.mode, { busy: false })
+    }
+  }
+
   async function createVideo(targetMode: ModeId = mode) {
     const targetDraft = drafts[targetMode]
     const targetIsWaiting = targetDraft.busy || targetDraft.polling
@@ -957,54 +1367,18 @@ function App() {
       return
     }
 
+    const file = targetDraft.file
+    const session = readMiguSession()
     updateDraft(targetMode, { busy: true, result: null })
 
-    const formData = new FormData()
-    formData.append('image', targetDraft.file)
-    formData.append('mode', targetMode)
-    if (targetMode === 'costume') formData.append('template', costumeStyle)
-    if (targetMode === 'painting') formData.append('template', paintingStyle)
-    formData.append('gender', gender)
-
-    try {
-      const response = await fetch('/api/create', {
-        method: 'POST',
-        body: formData,
-      })
-      let data: CreateResult
-      try {
-        data = (await response.json()) as CreateResult
-      } catch {
-        data = {
-          status: 'failed',
-          mode: targetMode,
-          message: `服务返回了异常响应（HTTP ${response.status}），请稍后重试。`,
-        }
-      }
-      data = { ...data, mode: targetMode }
-      updateDraft(targetMode, { result: data })
-      saveWork(data)
-      setChatMode(targetMode)
-      setView('chat')
-      setChatMessages([
-        { id: `user-${Date.now()}`, role: 'user', text: `使用「${data.templateTitle || modeLabels[targetMode]}」发起创作` },
-      ])
-
-      if (response.ok && data.taskId && ['queued', 'running'].includes(data.status)) {
-        savePendingTask(targetMode, data)
-        void pollTask(data, targetMode)
-      }
-    } catch {
-      updateDraft(targetMode, {
-        result: {
-          status: 'failed',
-          mode: targetMode,
-          message: '无法连接本地服务，请确认已经运行 npm run dev 后重试。',
-        },
-      })
-    } finally {
+    if (tokenGatingEnabled && session?.btoken) {
+      await beginTokenGatedCreation(targetMode, file, session.btoken)
+      // 成功时上面那步已经整页跳转离开了，走不到这里；只有失败/降级路径需要收尾复位
       updateDraft(targetMode, { busy: false })
+      return
     }
+
+    await submitLegacyCreate(targetMode, file)
   }
 
   async function pollTask(initial: CreateResult, targetMode: ModeId) {
@@ -1043,11 +1417,46 @@ function App() {
         if (current.status === 'succeeded') {
           saveWork(current)
           clearPendingTask(targetMode)
+          const miguTaskId = current.taskId ? miguTaskIdByJobRef.current[current.taskId] : undefined
+          if (miguTaskId && current.videoUrl) {
+            trackAmberCompleteTask(
+              miguTaskId,
+              current.videoUrl,
+              templateIdFor(targetMode),
+              current.templateTitle,
+              readMiguSession()?.vuid,
+            )
+            trackQingyuanTraceLog({
+              processId: 2,
+              processType: '8',
+              orderId: miguTaskId,
+              goodsId: templateIdFor(targetMode),
+              goodsName: current.templateTitle,
+              contentId: current.taskId,
+              resultCode: '0',
+              isInMiguApp: miguEnv.isInMiguAPP,
+              isInMiniprogram: miguEnv.isInMiniprogram,
+            })
+          }
           return
         }
 
         if (current.status === 'failed') {
           clearPendingTask(targetMode)
+          const miguTaskId = current.taskId ? miguTaskIdByJobRef.current[current.taskId] : undefined
+          if (miguTaskId) {
+            trackQingyuanTraceLog({
+              processId: 2,
+              processType: '8',
+              orderId: miguTaskId,
+              goodsId: templateIdFor(targetMode),
+              contentId: current.taskId,
+              resultCode: '1',
+              errorMessage: current.message,
+              isInMiguApp: miguEnv.isInMiguAPP,
+              isInMiniprogram: miguEnv.isInMiniprogram,
+            })
+          }
           return
         }
       }
@@ -1093,9 +1502,9 @@ function App() {
           <Info size={14} />
         </button>
         <div className="topbar-actions">
-          <button className="credit-badge" type="button" onClick={() => setToast('分贝明细暂未配置')} aria-label="查看分贝明细">
+          <button className="credit-badge" type="button" onClick={() => void openUsageDetail()} aria-label="查看分贝明细">
             <Sparkles size={13} />
-            999
+            {tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? 999}
           </button>
           <button className="works-pill" type="button" onClick={() => setView(view === 'library' ? 'home' : 'library')}>
             我的作品
@@ -1192,7 +1601,7 @@ function App() {
         />
       )}
 
-      {showInfo && <InfoModal onClose={() => setShowInfo(false)} />}
+      {showInfo && <InfoModal onClose={() => setShowInfo(false)} onViewUsageDetail={openUsageDetail} />}
       {showLoginDialog && <LoginDialog onCancel={closeLoginDialog} onConfirm={confirmLogin} />}
       {showUsageNotice && <UsageNoticeSheet onAccept={confirmUsageNotice} onClose={closeUsageNotice} />}
       {showMediaSourceSheet && (
@@ -2810,7 +3219,7 @@ function ImagePreviewModal({ src, onClose, onReplace }: { src: string; onClose: 
   )
 }
 
-function InfoModal({ onClose }: { onClose: () => void }) {
+function InfoModal({ onClose, onViewUsageDetail }: { onClose: () => void; onViewUsageDetail: () => void }) {
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-title">
@@ -2822,6 +3231,9 @@ function InfoModal({ onClose }: { onClose: () => void }) {
           1、本服务由<strong>{serviceProviderName}</strong>提供，需要登录后方可使用。
         </p>
         <p>2、应用在标注“活动体验”期间无需支付使用费用。在没有标注“活动体验”时使用创作服务就会开始收费（收费标准结合AI研发和算力成本制定）。</p>
+        <button className="usage-detail-link" type="button" onClick={onViewUsageDetail}>
+          查看 Token 使用明细
+        </button>
         <button type="button" onClick={onClose}>
           知道了
         </button>
