@@ -139,7 +139,10 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
         sourceImageUrl: imageUrl,
         prompt: buildCostumeReferencePrompt(),
       })
-      updateJob(jobId, { message: '参考图已生成，正在提交视频生成任务...' })
+      updateJob(jobId, {
+        message: '参考图已生成，正在提交视频生成任务...',
+        mediumResults: [{ contentType: 'image', content: costumeReferenceImageUrl }],
+      })
       const task = await submitImageToVideoTask({
         mode,
         imageUrl: costumeReferenceImageUrl,
@@ -159,8 +162,8 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
       message,
     })
     updateMiguTokenTaskState(jobId, 'failed', message)
-    // 已经完成 Token 预扣，但后台任务未能成功提交时立即撤销；即使用户关闭页面也不会一直占用预扣权益。
-    await settleTokenOutcomeIfNeeded(jobId, false, {})
+    // 任务已经进入创作流程，最终失败也必须调用结果上报并传 result=false，返还预扣权益。
+    await settleTokenOutcomeIfNeeded(jobId, 'failure', {})
   } finally {
     if (file?.path) {
       try {
@@ -222,35 +225,38 @@ function resolveStyle(mode, template) {
   return { style: null, templateTitle: 'AI识别美食' }
 }
 
-// Token 结算：成功走“使用结果上报”，失败走“使用撤销”。
+// Token 结算：创作成功/失败都走“使用结果上报”；只有用户主动取消或废弃任务才走“使用撤销”。
 // 同一个 job 的并发轮询复用同一个 Promise；接口失败时恢复 pending，允许下次轮询重试。
-async function settleTokenOutcomeIfNeeded(jobId, succeeded, { inputImageUrl, videoUrl }) {
+async function settleTokenOutcomeIfNeeded(jobId, outcome, { inputImageUrl, videoUrl }) {
   const job = jobId.startsWith('job-') ? jobs.get(jobId) : null
   if (!job?.miguTaskId || job.tokenSettlementStatus === 'settled') return true
   if (job.tokenSettlementPromise) return job.tokenSettlementPromise
 
   const operation = (async () => {
     try {
-      if (succeeded) {
+      if (outcome === 'cancel') {
+        await cancelTokenTask({ otoken: job.miguOtoken, taskId: job.miguTaskId })
+      } else {
+        const succeeded = outcome === 'success'
         await reportTokenResult({
           otoken: job.miguOtoken,
           taskId: job.miguTaskId,
-          result: true,
+          result: succeeded,
           inputContents: [{ contentType: 'image', content: inputImageUrl || job.inputImageUrl || '' }],
           ...(videoUrl ? { finalResults: [{ contentType: 'video', content: videoUrl }] } : {}),
+          ...(job.mediumResults?.length ? { mediumResults: job.mediumResults } : {}),
         })
-      } else {
-        await cancelTokenTask({ otoken: job.miguOtoken, taskId: job.miguTaskId })
       }
-      updateJob(jobId, { tokenSettlementStatus: 'settled', tokenSettlementOutcome: succeeded ? 'reported' : 'cancelled' })
-      updateMiguTokenSettlement(jobId, 'settled', succeeded ? 'reported' : 'cancelled')
+      const settlementOutcome = outcome === 'cancel' ? 'cancelled' : outcome === 'success' ? 'reported_success' : 'reported_failure'
+      updateJob(jobId, { tokenSettlementStatus: 'settled', tokenSettlementOutcome: settlementOutcome })
+      updateMiguTokenSettlement(jobId, 'settled', settlementOutcome)
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       updateJob(jobId, { tokenSettlementStatus: 'pending' })
       updateMiguTokenSettlement(jobId, 'pending', '', message)
       console.error(
-        `[migu] Token ${succeeded ? '使用结果上报' : '预扣撤销'}失败（jobId=${jobId}, miguTaskId=${job.miguTaskId}），等待下次重试：`,
+        `[migu] Token ${outcome === 'cancel' ? '预扣撤销' : '使用结果上报'}失败（jobId=${jobId}, miguTaskId=${job.miguTaskId}），等待下次重试：`,
         error,
       )
       return false
@@ -809,7 +815,7 @@ app.get('/api/tasks/:taskId', async (request, response) => {
     const archived = await ensureArchivedVideoPoster(taskId)
     if (archived) {
       // 首次成功上报若遇到临时网络错误，后续查询归档作品时继续补报。
-      await settleTokenOutcomeIfNeeded(taskId, true, { videoUrl: archived.videoUrl })
+      await settleTokenOutcomeIfNeeded(taskId, 'success', { videoUrl: archived.videoUrl })
       return response.json({
         taskId,
         status: 'succeeded',
@@ -836,7 +842,7 @@ app.get('/api/tasks/:taskId', async (request, response) => {
       }
       templateTitle = job.templateTitle
       if (!job.arkTaskId) {
-        if (job.status === 'failed') await settleTokenOutcomeIfNeeded(taskId, false, {})
+        if (job.status === 'failed') await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
         return response.json({
           taskId,
           status: job.status === 'failed' ? 'failed' : 'running',
@@ -858,7 +864,7 @@ app.get('/api/tasks/:taskId', async (request, response) => {
         description: `${mode} 生成结果视频`,
       })
       if (!outputAudit.passed) {
-        await settleTokenOutcomeIfNeeded(taskId, false, {})
+        await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
         return response.json({
           taskId,
           status: 'failed',
@@ -893,14 +899,14 @@ app.get('/api/tasks/:taskId', async (request, response) => {
           )
         }
       }
-      await settleTokenOutcomeIfNeeded(taskId, true, { videoUrl: data.videoUrl })
+      await settleTokenOutcomeIfNeeded(taskId, 'success', { videoUrl: data.videoUrl })
     } else if (data.status === 'failed') {
-      await settleTokenOutcomeIfNeeded(taskId, false, {})
+      await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
     }
     return response.json({ ...data, taskId, mode, ...(templateTitle ? { templateTitle } : {}) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to query task.'
-    await settleTokenOutcomeIfNeeded(taskId, false, {})
+    await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
     return response.status(500).json({
       taskId,
       status: 'failed',

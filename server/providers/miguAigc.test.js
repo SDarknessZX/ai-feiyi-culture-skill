@@ -3,7 +3,10 @@ import test from 'node:test'
 import {
   buildPublishRedirectUrl,
   buildTaskIdRedirectUrl,
+  cancelTokenTask,
   hasUsableTokenEntitlement,
+  reportInteraction,
+  reportTokenResult,
   validatePublishMediaUrl,
 } from './miguAigc.js'
 
@@ -124,4 +127,63 @@ test('rejects unsupported or overly long publish media URLs before minting a tok
     () => validatePublishMediaUrl(`https://cdn.example.com/${'a'.repeat(190)}.mp4`, videoExtensions, '视频'),
     /200 个字符/,
   )
+})
+
+test('calls cancel, result report, and interaction endpoints with documented payloads', async () => {
+  const originalFetch = globalThis.fetch
+  const previous = {
+    appId: process.env.MIGU_AIGC_APP_ID,
+    appSecret: process.env.MIGU_AIGC_APP_SECRET,
+    channelCode: process.env.MIGU_CHANNEL_CODE,
+    callbackUrl: process.env.MIGU_CALLBACK_URL,
+  }
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+  })
+  const calls = []
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), headers: options.headers, body: JSON.parse(options.body) })
+    return new Response(JSON.stringify({ code: '000000', info: '成功', data: {} }), { status: 200 })
+  }
+
+  try {
+    await cancelTokenTask({ otoken: 'business-token', taskId: 'task-1' })
+    await reportTokenResult({
+      otoken: 'business-token',
+      taskId: 'task-2',
+      result: false,
+      inputContents: [{ contentType: 'image', content: 'https://cdn.example.com/input.jpg' }],
+      mediumResults: [{ contentType: 'image', content: 'https://cdn.example.com/medium.jpg' }],
+    })
+    await reportInteraction({ otoken: 'business-token', ask: '', ans: '快捷文案', ansBy: 'shortcut' })
+
+    assert.match(calls[0].url, /\/open\/api\/user\/ai-charging\/cancel\/task\/v1\.0$/)
+    assert.deepEqual(calls[0].body, { taskId: 'task-1', appId: 'ability-id' })
+    assert.match(calls[1].url, /\/open\/api\/user\/ai-charging\/report\/result\/v1\.0$/)
+    assert.equal(calls[1].body.result, false)
+    assert.deepEqual(calls[1].body.mediumResults, [
+      { contentType: 'image', content: 'https://cdn.example.com/medium.jpg' },
+    ])
+    assert.match(calls[2].url, /\/open\/api\/user\/ai-charging\/report\/interact\/v1\.0$/)
+    assert.deepEqual(calls[2].body, { appId: 'ability-id', ask: '', ans: '快捷文案', ansBy: 'shortcut' })
+    for (const call of calls) {
+      assert.equal(call.headers['x-mgmusic-otoken'], 'business-token')
+      assert.ok(call.headers['x-mgmusic-osign'])
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+    const variables = {
+      MIGU_AIGC_APP_ID: previous.appId,
+      MIGU_AIGC_APP_SECRET: previous.appSecret,
+      MIGU_CHANNEL_CODE: previous.channelCode,
+      MIGU_CALLBACK_URL: previous.callbackUrl,
+    }
+    for (const [key, value] of Object.entries(variables)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 })
