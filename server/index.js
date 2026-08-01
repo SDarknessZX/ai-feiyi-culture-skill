@@ -26,6 +26,7 @@ import {
 import { checkContent, getContentAuditConfigReport, handleAuditCallback } from './providers/contentAudit.js'
 import {
   buildLoginRedirectUrl,
+  buildPublishRedirectUrl,
   buildTaskIdRedirectUrl,
   buildUsageDetailUrl,
   decryptMiguMsisdn,
@@ -77,6 +78,11 @@ const chatSchema = z.object({
 const posterSchema = z.object({
   taskId: z.string().regex(/^[\w-]{1,128}$/).optional(),
   videoUrl: z.string().trim().min(1).max(2048),
+})
+
+const publishVideoSchema = z.object({
+  videoUrl: z.string().trim().min(1).max(2048),
+  videoCover: z.string().trim().min(1).max(2048),
 })
 
 const taskIdPattern = /^[\w-]{1,128}$/
@@ -282,6 +288,26 @@ app.get('/api/migu/login-url', async (request, response) => {
     response.json({ url })
   } catch (error) {
     response.status(400).json({ message: error instanceof Error ? error.message : '无法生成登录地址。' })
+  }
+})
+app.post('/api/migu/publish-url', async (request, response) => {
+  const parsed = publishVideoSchema.safeParse(request.body)
+  if (!parsed.success) {
+    return response.status(400).json({ message: '缺少可发布的视频或封面地址。' })
+  }
+  try {
+    const forwardedProto = String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+    const protocol = forwardedProto || request.protocol
+    const origin = `${protocol}://${request.get('host') || 'localhost'}`
+    const videoUrl = new URL(parsed.data.videoUrl, origin)
+    const videoCover = new URL(parsed.data.videoCover, origin)
+    if (!['http:', 'https:'].includes(videoUrl.protocol) || !['http:', 'https:'].includes(videoCover.protocol)) {
+      return response.status(400).json({ message: '视频或封面地址格式不正确。' })
+    }
+    const url = await buildPublishRedirectUrl({ videoUrl: videoUrl.toString(), videoCover: videoCover.toString() })
+    response.json({ url })
+  } catch (error) {
+    response.status(400).json({ message: error instanceof Error ? error.message : '无法生成视频彩铃发布地址。' })
   }
 })
 app.get('/api/migu/usage-detail-url', (request, response) => {

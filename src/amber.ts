@@ -79,5 +79,3 @@ export function trackAmberCompleteTask(
   if (templateName) extra.push({ EK: 'templateName', EV: templateName })
   track('music_aigc_complete_task', extra, vuid)
 }
-
-// f（视频彩铃发布事件）依赖发布页功能，现在应用里还没有"发布到彩铃"入口，先不做。

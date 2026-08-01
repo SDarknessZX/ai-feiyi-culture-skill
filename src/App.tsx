@@ -476,6 +476,7 @@ function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const resumeRef = useRef(false)
   const returnToCreationPanelRef = useRef(false)
+  const publishRedirectingRef = useRef(false)
   // 咱们的 jobId -> 咪咕 taskId，创作完成事件上报要用，跨 pollTask 的多轮请求持续存在
   const miguTaskIdByJobRef = useRef<Record<string, string>>({})
 
@@ -1480,6 +1481,38 @@ function App() {
     }
   }
 
+  async function publishVideo(videoUrl?: string, videoCover?: string) {
+    if (publishRedirectingRef.current) return
+    if (!videoUrl) {
+      setToast('缺少可发布的视频地址')
+      return
+    }
+    if (!videoCover) {
+      setToast('视频封面尚未生成，请稍后重试')
+      return
+    }
+
+    publishRedirectingRef.current = true
+    try {
+      const response = await fetch('/api/migu/publish-url', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ videoUrl, videoCover }),
+      })
+      const data = (await response.json()) as { url?: string; message?: string }
+      if (!response.ok || !data.url) {
+        setToast(data.message || '暂时无法打开视频彩铃发布页')
+        return
+      }
+      // 发布页 token 每次现取且只能使用一次，必须整页跳转，不能 window.open。
+      window.location.href = data.url
+    } catch {
+      setToast('无法连接发布服务，请稍后重试')
+    } finally {
+      publishRedirectingRef.current = false
+    }
+  }
+
   return (
     <main
       className={`app-shell view-${view}${miguEnv.isInMiguAPP ? ' in-migu' : ''}${miguEnv.isInMiniprogram ? ' in-miniprogram' : ''}`}
@@ -1534,7 +1567,7 @@ function App() {
           topics={chatTopics}
           chatBusy={chatBusy}
           onRegenerate={() => void createVideo(chatMode)}
-          onPublish={() => setToast('发布视频页待接入')}
+          onPublish={() => void publishVideo(chatVideoUrl, chatResult?.posterUrl)}
           onTopic={startNonCreativeChat}
           onUnlockHome={returnHome}
         />
@@ -1546,7 +1579,7 @@ function App() {
           onDelete={deleteWork}
           onClearDraft={clearDraftResult}
           onPickMode={chooseMode}
-          onPublish={() => setToast('发布视频页待接入')}
+          onPublish={(record) => void publishVideo(record.videoUrl, record.posterUrl)}
           onUnlockHome={returnHome}
           works={works}
         />
@@ -2405,7 +2438,7 @@ function LibraryView({
   onClearDraft: (mode: ModeId) => void
   onDelete: (id: string) => void
   onPickMode: (mode: ModeId) => void
-  onPublish: () => void
+  onPublish: (record: CreationRecord) => void
   onUnlockHome: () => void
 }) {
   const [actionRecord, setActionRecord] = useState<CreationRecord | null>(null)
@@ -2464,7 +2497,7 @@ function LibraryView({
               onDelete={() => setDeleteRecord(record)}
               onMore={() => setActionRecord(record)}
               onOpenVideo={() => setPlayRecord(record)}
-              onPublish={onPublish}
+              onPublish={() => onPublish(record)}
               onRedo={() => setRedoRecord(record)}
             />
           ))}

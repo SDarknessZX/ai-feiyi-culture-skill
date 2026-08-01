@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 // SKILL：非遗文化
 const LOGIN_PAGE_BASE = 'https://y.migu.cn/app/v5/p/middle/ai-channel-token/index.html'
 const TASK_ID_PAGE_BASE = 'https://y.migu.cn/app/v5/p/middle/ai-channel-task-id/index.html'
+const PUBLISH_PAGE_BASE = 'https://y.migu.cn/app/v5/p/publish-mid/index.html'
 const USAGE_DETAIL_PAGE_BASE = 'https://h5.nf.migu.cn/app/v4/n/ai/use-detail/index.html'
 // Token 计费服务端接口地址：文档给的是 IP+端口，没有域名。
 // 测试环境端口是 31011，线网环境端口是 31010 —— 这里默认线网，测试环境请用 MIGU_TOKEN_API_BASE_URL 覆盖成 :31011
@@ -19,6 +20,7 @@ function getConfig() {
     channelCode: process.env.MIGU_CHANNEL_CODE?.trim() || '',
     projectId: process.env.MIGU_PROJECT_ID?.trim() || '',
     releaseId: process.env.MIGU_RELEASE_ID?.trim() || '',
+    watermarkId: process.env.MIGU_WATERMARK_ID?.trim() || '',
     callbackUrl: process.env.MIGU_CALLBACK_URL?.trim() || '',
   }
 }
@@ -51,6 +53,8 @@ export function getMiguAigcConfigReport() {
     appId: config.appId || null,
     channelCode: config.channelCode || null,
     projectId: config.projectId || null,
+    releaseIdConfigured: Boolean(config.releaseId),
+    watermarkIdConfigured: Boolean(config.watermarkId),
     callbackUrlConfigured: Boolean(config.callbackUrl),
     channelLoginConfigured: isChannelLoginConfigured(),
     tokenGatingEnabled: isTokenGatingEnabled(),
@@ -171,6 +175,30 @@ export function buildTaskIdRedirectUrl({ btoken, modelValue, contentType }) {
   if (config.projectId) params.set('projectId', config.projectId)
   if (contentType) params.set('contentType', contentType)
   return `${TASK_ID_PAGE_BASE}?${params.toString()}`
+}
+
+// 视频生成成功后的彩铃发布页。文档要求 token 由登录接口重新获取且只能使用一次，
+// 因此不能复用登录跳转时的 cToken，也不能把长期 btoken 当作这里的 token。
+export async function buildPublishRedirectUrl({ videoUrl, videoCover }) {
+  assertConfigured()
+  const config = getConfig()
+  if (!videoUrl) throw new Error('缺少发布视频地址。')
+  if (!videoCover) throw new Error('缺少视频封面地址。')
+  if (!config.watermarkId) throw new Error('缺少 MIGU_WATERMARK_ID 配置，无法打开视频彩铃发布页。')
+  if (!config.projectId) throw new Error('缺少 MIGU_PROJECT_ID 配置，无法打开视频彩铃发布页。')
+  if (!config.releaseId) throw new Error('缺少 MIGU_RELEASE_ID 配置，无法打开视频彩铃发布页。')
+
+  const token = await mintCToken()
+  const params = new URLSearchParams({
+    videoUrl,
+    videoCover,
+    watermarkId: config.watermarkId,
+    projectId: config.projectId,
+    releaseId: config.releaseId,
+    token,
+    tokenType: 'MGPT',
+  })
+  return `${PUBLISH_PAGE_BASE}?${params.toString()}`
 }
 
 // 分贝明细页（Token 使用明细）：直接打开即可，不需要跳转再回调
