@@ -182,28 +182,31 @@ export async function auditContent({ kind, content, contentId, description }) {
     })
   } catch (error) {
     const wrapped = new Error(`机审接口请求失败：${error instanceof Error ? error.message : String(error)}`)
-    if (waitForCallback) settlePendingAudit(dataId, (pending) => pending.reject(wrapped))
+    // 请求阶段已经失败时，外层会直接接住下面抛出的异常；这里只需清理尚未返回给
+    // 调用方的回调等待器。再次 reject 会产生一个无人等待的 Promise rejection，
+    // 在 Node 的严格未处理拒绝模式下会直接终止进程。
+    if (waitForCallback) settlePendingAudit(dataId, () => {})
     throw wrapped
   }
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
     const error = new Error(`机审接口请求失败：HTTP ${response.status} ${detail}`.trim())
-    if (waitForCallback) settlePendingAudit(dataId, (pending) => pending.reject(error))
+    if (waitForCallback) settlePendingAudit(dataId, () => {})
     throw error
   }
 
   const payload = await response.json().catch(() => null)
   if (!payload || payload.code !== '000000') {
     const error = new Error(payload?.info || '机审接口返回了未知错误。')
-    if (waitForCallback) settlePendingAudit(dataId, (pending) => pending.reject(error))
+    if (waitForCallback) settlePendingAudit(dataId, () => {})
     throw error
   }
 
   const [result] = payload.data || []
   if (!result) {
     const error = new Error('机审接口未返回审核结果。')
-    if (waitForCallback) settlePendingAudit(dataId, (pending) => pending.reject(error))
+    if (waitForCallback) settlePendingAudit(dataId, () => {})
     throw error
   }
 
