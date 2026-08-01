@@ -6,7 +6,12 @@ type AmberParam = { EK: string; EV: string }
 // 这里的全局类型声明要跟那边保持一致，否则两个文件的 declare global 会冲突
 declare global {
   interface Window {
-    _amberTrack?: (id: string, data: Array<{ EK: string; EV: string | Record<string, unknown> }>) => void
+    _amberTrack?: (
+      id: string,
+      data: Array<{ EK: string; EV: string | Record<string, unknown> }>,
+      immediate?: boolean,
+      transport?: string,
+    ) => void
   }
 }
 
@@ -24,19 +29,24 @@ function baseParams(vuid?: string): AmberParam[] {
   return params
 }
 
-function track(eid: string, extra: AmberParam[], vuid?: string) {
+function track(eid: string, extra: AmberParam[], vuid?: string, useBeacon = false) {
   // 公共参数（appId/scene/channel）文档标注任何事件都要上报，缺了就不上报，避免脏数据
   if (!appId || !scene || !channel) return
-  window._amberTrack?.(eid, [...baseParams(vuid), ...extra])
+  const params = [...baseParams(vuid), ...extra]
+  if (useBeacon) {
+    window._amberTrack?.(eid, params, true, 'beacon')
+  } else {
+    window._amberTrack?.(eid, params)
+  }
 }
 
 // a. 登录事件：用户完成登录（含失败）时上报
-export function trackAmberLogin(result: 'success' | 'fail', vuid?: string) {
+export function trackAmberLogin(result: 'success' | 'fail' | 'cancel', vuid?: string) {
   track(
     'music_aigc_login',
     [
       { EK: 'triggerType', EV: '2' },
-      { EK: 'loginResult', EV: result === 'success' ? '0' : '1' },
+      { EK: 'loginResult', EV: result === 'success' ? '0' : result === 'fail' ? '1' : '2' },
     ],
     vuid,
   )
@@ -78,4 +88,20 @@ export function trackAmberCompleteTask(
   if (templateId) extra.push({ EK: 'templateId', EV: templateId })
   if (templateName) extra.push({ EK: 'templateName', EV: templateName })
   track('music_aigc_complete_task', extra, vuid)
+}
+
+// f. 视频彩铃发布事件：整页跳转前用 sendBeacon 通道，避免页面卸载导致事件丢失。
+export function trackAmberPublishRingtone(
+  resId: string,
+  videoUrl: string,
+  templateId?: string,
+  vuid?: string,
+) {
+  const extra: AmberParam[] = [
+    { EK: 'triggerType', EV: '2' },
+    { EK: 'resId', EV: resId },
+    { EK: 'videoUrl', EV: videoUrl },
+  ]
+  if (templateId) extra.push({ EK: 'templateId', EV: templateId })
+  track('music_aigc_publish_ringtone', extra, vuid, true)
 }

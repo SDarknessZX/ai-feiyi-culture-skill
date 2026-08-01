@@ -31,7 +31,14 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
-import { trackAmberCompleteTask, trackAmberEnter, trackAmberInteract, trackAmberLogin, trackAmberSubmitTask } from './amber'
+import {
+  trackAmberCompleteTask,
+  trackAmberEnter,
+  trackAmberInteract,
+  trackAmberLogin,
+  trackAmberPublishRingtone,
+  trackAmberSubmitTask,
+} from './amber'
 import { advanceQingyuanPageSeq, trackQingyuanPageLoad, trackQingyuanPageStay, trackQingyuanTraceLog, trackQingyuanUserLogin } from './qingyuan'
 import './App.css'
 
@@ -954,6 +961,7 @@ function App() {
   }
 
   function closeLoginDialog() {
+    trackAmberLogin('cancel')
     setShowLoginDialog(false)
     restorePreviousPanel()
   }
@@ -1523,7 +1531,7 @@ function App() {
     }
   }
 
-  async function publishVideo(videoUrl?: string, videoCover?: string) {
+  async function publishVideo(videoUrl?: string, videoCover?: string, resourceId?: string, templateId?: string) {
     if (publishRedirectingRef.current) return
     if (!videoUrl) {
       setToast('缺少可发布的视频地址')
@@ -1556,6 +1564,7 @@ function App() {
         return
       }
       // 发布页 token 每次现取且只能使用一次，必须整页跳转，不能 window.open。
+      trackAmberPublishRingtone(resourceId || videoUrl, videoUrl, templateId, readMiguSession()?.vuid)
       window.location.href = data.url
     } catch {
       setToast('无法连接发布服务，请稍后重试')
@@ -1618,7 +1627,9 @@ function App() {
           topics={chatTopics}
           chatBusy={chatBusy}
           onRegenerate={() => void createVideo(chatMode)}
-          onPublish={() => void publishVideo(chatVideoUrl, chatResult?.posterUrl)}
+          onPublish={() =>
+            void publishVideo(chatVideoUrl, chatResult?.posterUrl, chatResult?.taskId, templateIdFor(chatMode))
+          }
           onTopic={startNonCreativeChat}
           onUnlockHome={returnHome}
         />
@@ -1630,7 +1641,7 @@ function App() {
           onDelete={deleteWork}
           onClearDraft={clearDraftResult}
           onPickMode={chooseMode}
-          onPublish={(record) => void publishVideo(record.videoUrl, record.posterUrl)}
+          onPublish={(record) => void publishVideo(record.videoUrl, record.posterUrl, record.taskId)}
           onUnlockHome={returnHome}
           works={works}
         />

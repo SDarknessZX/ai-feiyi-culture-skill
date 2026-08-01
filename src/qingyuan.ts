@@ -11,7 +11,12 @@ type QingyuanParam = { EK: string; EV: QingyuanValue }
 // _amberTrack 的全局类型声明要跟 amber.ts 里的保持结构一致，否则两边的 declare global 会冲突
 declare global {
   interface Window {
-    _amberTrack?: (id: string, data: Array<{ EK: string; EV: string | Record<string, unknown> }>) => void
+    _amberTrack?: (
+      id: string,
+      data: Array<{ EK: string; EV: string | Record<string, unknown> }>,
+      immediate?: boolean,
+      transport?: string,
+    ) => void
     AmberWebSdk?: {
       getSdkTraceId?: () => string
     }

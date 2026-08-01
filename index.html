@@ -18,13 +18,13 @@
             }
           });
         window._amberTrack ||
-          (window._amberTrack = function (id, data) {
+          (window._amberTrack = function (id, data, immediate, transport) {
             if (Array.isArray(id)) {
               id.forEach(function (v) {
                 window._amberEventTrack(v.ID, v.POP);
               });
             } else if (typeof id === 'string') {
-              window._amberEventTrack(id, data);
+              window._amberEventTrack(id, data, immediate, transport);
             }
           });
         window.AmberWebSdk ||
