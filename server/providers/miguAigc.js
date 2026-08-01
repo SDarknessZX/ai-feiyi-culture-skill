@@ -316,6 +316,7 @@ export async function queryTokenRemainCount({ otoken, modelValue }) {
 
 export function hasUsableTokenEntitlement(data) {
   if (!data || typeof data !== 'object') return false
+  if (Number(data.status) !== 1) return false
   return ['rightsCount', 'experienceCount', 'availablePointsCount'].some((key) => {
     const count = Number(data[key])
     return Number.isFinite(count) && count > 0

@@ -10,10 +10,11 @@ import {
 test('requires a positive entitlement count before requesting taskId', () => {
   assert.equal(hasUsableTokenEntitlement(null), false)
   assert.equal(hasUsableTokenEntitlement({}), false)
-  assert.equal(hasUsableTokenEntitlement({ rightsCount: 0, experienceCount: '0', availablePointsCount: -1 }), false)
-  assert.equal(hasUsableTokenEntitlement({ rightsCount: '1' }), true)
-  assert.equal(hasUsableTokenEntitlement({ experienceCount: 2 }), true)
-  assert.equal(hasUsableTokenEntitlement({ availablePointsCount: '3' }), true)
+  assert.equal(hasUsableTokenEntitlement({ status: 0, rightsCount: 1 }), false)
+  assert.equal(hasUsableTokenEntitlement({ status: 1, rightsCount: 0, experienceCount: '0', availablePointsCount: -1 }), false)
+  assert.equal(hasUsableTokenEntitlement({ status: 1, rightsCount: '1' }), true)
+  assert.equal(hasUsableTokenEntitlement({ status: '1', experienceCount: 2 }), true)
+  assert.equal(hasUsableTokenEntitlement({ status: 1, availablePointsCount: '3' }), true)
 })
 
 test('builds the documented taskId H5 URL and query parameters', () => {
