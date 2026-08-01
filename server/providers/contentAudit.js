@@ -74,13 +74,17 @@ function buildAuthorization({ account, appKey }) {
   return `authv1-${account}-${timestamp}-${signature}`
 }
 
-// 占位实现：官方加密工具在 AuditAesEncryptUtils.docx 附件里，具体加密模式/填充方式文档没写全。
-// 这里先按常见约定实现——AES-128-ECB + PKCS5Padding，密钥取 appKey 原始字节，输出 Base64
-//（appKey 正好是 16 字节，符合 AES-128 密钥长度）。等拿到官方工具确切算法后只需替换这一个函数。
+// 官方 AuditAesEncryptUtils 附件规定 AES/CBC/PKCS5Padding，固定 IV 为
+// m5iNL1GeLYpcokH9；密钥取 appKey 的 UTF-8 原始字节，输出无换行 Base64。
+// Node 的 PKCS#7 对 AES 的 16 字节分组与 Java PKCS5Padding 输出一致。
 export function encryptAuditUrl(url) {
   const { appKey } = getConfig()
   const key = Buffer.from(appKey, 'utf8')
-  const cipher = crypto.createCipheriv('aes-128-ecb', key, null)
+  if (key.length !== 16) {
+    throw new Error(`机审 appKey 必须是 16 字节，当前为 ${key.length} 字节。`)
+  }
+  const iv = Buffer.from('m5iNL1GeLYpcokH9', 'utf8')
+  const cipher = crypto.createCipheriv('aes-128-cbc', key, iv)
   return Buffer.concat([cipher.update(url, 'utf8'), cipher.final()]).toString('base64')
 }
 

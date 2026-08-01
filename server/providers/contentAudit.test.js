@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { checkContent, isAuditServiceUnavailable } from './contentAudit.js'
+import { checkContent, encryptAuditUrl, isAuditServiceUnavailable } from './contentAudit.js'
+
+test('encrypts media URLs with the official AES-CBC parameters', () => {
+  const previousAppKey = process.env.AUDIT_APP_KEY
+  process.env.AUDIT_APP_KEY = '1234567890abcdef'
+  try {
+    assert.equal(
+      encryptAuditUrl('https://example.test/input.jpg'),
+      'viYoQi9i55rRU3gGKg7UF465MWX1zX5YjC7bajhTACY=',
+    )
+  } finally {
+    restoreEnv('AUDIT_APP_KEY', previousAppKey)
+  }
+})
 
 test('handles an audit service business error without an unhandled rejection', async () => {
   const previous = {
