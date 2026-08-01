@@ -86,6 +86,11 @@ const posterSchema = z.object({
 const publishVideoSchema = z.object({
   videoUrl: z.string().trim().min(1).max(2048),
   videoCover: z.string().trim().min(1).max(2048),
+  projectId: z.string().trim().max(256).optional(),
+  releaseId: z.string().trim().max(256).optional(),
+  watermarkId: z.string().trim().max(256).optional(),
+  otherSet: z.string().trim().max(256).optional(),
+  isMiniPublish: z.string().trim().max(32).optional(),
 })
 
 const taskIdPattern = /^[\w-]{1,128}$/
@@ -335,7 +340,15 @@ app.post('/api/migu/publish-url', async (request, response) => {
     if (!['http:', 'https:'].includes(videoUrl.protocol) || !['http:', 'https:'].includes(videoCover.protocol)) {
       return response.status(400).json({ message: '视频或封面地址格式不正确。' })
     }
-    const url = await buildPublishRedirectUrl({ videoUrl: videoUrl.toString(), videoCover: videoCover.toString() })
+    const url = await buildPublishRedirectUrl({
+      videoUrl: videoUrl.toString(),
+      videoCover: videoCover.toString(),
+      projectId: parsed.data.projectId,
+      releaseId: parsed.data.releaseId,
+      watermarkId: parsed.data.watermarkId,
+      otherSet: parsed.data.otherSet,
+      isMiniPublish: parsed.data.isMiniPublish,
+    })
     response.json({ url })
   } catch (error) {
     response.status(400).json({ message: error instanceof Error ? error.message : '无法生成视频彩铃发布地址。' })

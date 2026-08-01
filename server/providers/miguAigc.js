@@ -179,25 +179,36 @@ export function buildTaskIdRedirectUrl({ btoken, modelValue, contentType }) {
 
 // 视频生成成功后的彩铃发布页。文档要求 token 由登录接口重新获取且只能使用一次，
 // 因此不能复用登录跳转时的 cToken，也不能把长期 btoken 当作这里的 token。
-export async function buildPublishRedirectUrl({ videoUrl, videoCover }) {
+export async function buildPublishRedirectUrl({
+  videoUrl,
+  videoCover,
+  projectId,
+  releaseId,
+  watermarkId,
+  otherSet,
+  isMiniPublish,
+}) {
   assertConfigured()
   const config = getConfig()
+  const resolvedProjectId = projectId || config.projectId
+  const resolvedReleaseId = releaseId || config.releaseId
+  const resolvedWatermarkId = watermarkId || config.watermarkId
   if (!videoUrl) throw new Error('缺少发布视频地址。')
   if (!videoCover) throw new Error('缺少视频封面地址。')
-  if (!config.watermarkId) throw new Error('缺少 MIGU_WATERMARK_ID 配置，无法打开视频彩铃发布页。')
-  if (!config.projectId) throw new Error('缺少 MIGU_PROJECT_ID 配置，无法打开视频彩铃发布页。')
-  if (!config.releaseId) throw new Error('缺少 MIGU_RELEASE_ID 配置，无法打开视频彩铃发布页。')
+  if (!resolvedProjectId) throw new Error('咪咕登录回调及服务端配置均未提供 projectId，无法打开视频彩铃发布页。')
 
   const token = await mintCToken()
   const params = new URLSearchParams({
     videoUrl,
     videoCover,
-    watermarkId: config.watermarkId,
-    projectId: config.projectId,
-    releaseId: config.releaseId,
+    projectId: resolvedProjectId,
     token,
     tokenType: 'MGPT',
   })
+  if (resolvedReleaseId) params.set('releaseId', resolvedReleaseId)
+  if (resolvedWatermarkId) params.set('watermarkId', resolvedWatermarkId)
+  if (otherSet) params.set('otherSet', otherSet)
+  if (isMiniPublish) params.set('isMiniPublish', isMiniPublish)
   return `${PUBLISH_PAGE_BASE}?${params.toString()}`
 }
 

@@ -386,7 +386,16 @@ function clearPendingTask(mode: ModeId) {
   window.localStorage.setItem(pendingStorageKey, JSON.stringify(pending))
 }
 
-type MiguSession = { btoken: string; vuid?: string; obtainedAt: number }
+type MiguSession = {
+  btoken: string
+  vuid?: string
+  projectId?: string
+  releaseId?: string
+  watermarkId?: string
+  otherSet?: string
+  isMiniPublish?: string
+  obtainedAt: number
+}
 
 function readMiguSession(): MiguSession | null {
   try {
@@ -594,6 +603,11 @@ function App() {
     const search = new URLSearchParams(window.location.search)
     const btoken = search.get('btoken')
     const vuid = search.get('vuid')
+    const projectId = search.get('projectId')
+    const releaseId = search.get('releaseId')
+    const watermarkId = search.get('watermarkId')
+    const otherSet = search.get('otherSet')
+    const isMiniPublish = search.get('isMiniPublish')
     const loginWasPending = window.sessionStorage.getItem(miguLoginPendingKey) === '1'
     if (!btoken && !vuid && !loginWasPending) return
 
@@ -603,7 +617,16 @@ function App() {
     if (btoken) {
       window.localStorage.setItem(
         miguSessionStorageKey,
-        JSON.stringify({ btoken, ...(vuid ? { vuid } : {}), obtainedAt: Date.now() }),
+        JSON.stringify({
+          btoken,
+          ...(vuid ? { vuid } : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(releaseId ? { releaseId } : {}),
+          ...(watermarkId ? { watermarkId } : {}),
+          ...(otherSet ? { otherSet } : {}),
+          ...(isMiniPublish ? { isMiniPublish } : {}),
+          obtainedAt: Date.now(),
+        }),
       )
       setIsLoggedIn(true)
       if (loginWasPending) {
@@ -618,6 +641,11 @@ function App() {
 
     search.delete('btoken')
     search.delete('vuid')
+    search.delete('projectId')
+    search.delete('releaseId')
+    search.delete('watermarkId')
+    search.delete('otherSet')
+    search.delete('isMiniPublish')
     const nextQuery = search.toString()
     window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1508,10 +1536,19 @@ function App() {
 
     publishRedirectingRef.current = true
     try {
+      const session = readMiguSession()
       const response = await fetch('/api/migu/publish-url', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ videoUrl, videoCover }),
+        body: JSON.stringify({
+          videoUrl,
+          videoCover,
+          projectId: session?.projectId,
+          releaseId: session?.releaseId,
+          watermarkId: session?.watermarkId,
+          otherSet: session?.otherSet,
+          isMiniPublish: session?.isMiniPublish,
+        }),
       })
       const data = (await response.json()) as { url?: string; message?: string }
       if (!response.ok || !data.url) {

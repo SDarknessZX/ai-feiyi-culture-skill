@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildTaskIdRedirectUrl, hasUsableTokenEntitlement } from './miguAigc.js'
+import { buildPublishRedirectUrl, buildTaskIdRedirectUrl, hasUsableTokenEntitlement } from './miguAigc.js'
 
 test('requires a positive entitlement count before requesting taskId', () => {
   assert.equal(hasUsableTokenEntitlement(null), false)
@@ -50,5 +50,59 @@ test('builds the documented taskId H5 URL and query parameters', () => {
     else process.env.MIGU_CALLBACK_URL = previous.callbackUrl
     if (previous.projectId === undefined) delete process.env.MIGU_PROJECT_ID
     else process.env.MIGU_PROJECT_ID = previous.projectId
+  }
+})
+
+test('uses login callback publish parameters and omits optional values when absent', async () => {
+  const originalFetch = globalThis.fetch
+  const previous = {
+    appId: process.env.MIGU_AIGC_APP_ID,
+    appSecret: process.env.MIGU_AIGC_APP_SECRET,
+    channelCode: process.env.MIGU_CHANNEL_CODE,
+    callbackUrl: process.env.MIGU_CALLBACK_URL,
+    signKey: process.env.MIGU_CHANNEL_LOGIN_SIGN_KEY,
+    loginKey: process.env.MIGU_CHANNEL_LOGIN_KEY,
+  }
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+    MIGU_CHANNEL_LOGIN_SIGN_KEY: 'sign-key',
+    MIGU_CHANNEL_LOGIN_KEY: 'login-key',
+  })
+  globalThis.fetch = async () => new Response(JSON.stringify({ token: 'one-time-token' }), { status: 200 })
+
+  try {
+    const result = new URL(
+      await buildPublishRedirectUrl({
+        videoUrl: 'https://cdn.example.com/video.mp4',
+        videoCover: 'https://cdn.example.com/cover.jpg',
+        projectId: 'callback-project',
+        releaseId: 'callback-release',
+        watermarkId: 'callback-watermark',
+      }),
+    )
+    assert.equal(result.searchParams.get('projectId'), 'callback-project')
+    assert.equal(result.searchParams.get('releaseId'), 'callback-release')
+    assert.equal(result.searchParams.get('watermarkId'), 'callback-watermark')
+    assert.equal(result.searchParams.get('token'), 'one-time-token')
+    assert.equal(result.searchParams.get('tokenType'), 'MGPT')
+    assert.equal(result.searchParams.has('otherSet'), false)
+    assert.equal(result.searchParams.has('isMiniPublish'), false)
+  } finally {
+    globalThis.fetch = originalFetch
+    const variables = {
+      MIGU_AIGC_APP_ID: previous.appId,
+      MIGU_AIGC_APP_SECRET: previous.appSecret,
+      MIGU_CHANNEL_CODE: previous.channelCode,
+      MIGU_CALLBACK_URL: previous.callbackUrl,
+      MIGU_CHANNEL_LOGIN_SIGN_KEY: previous.signKey,
+      MIGU_CHANNEL_LOGIN_KEY: previous.loginKey,
+    }
+    for (const [key, value] of Object.entries(variables)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 })
