@@ -12,6 +12,32 @@ const API_BASE_URL = (process.env.MIGU_TOKEN_API_BASE_URL?.trim() || 'http://218
 // 《数智人和AI视频彩铃包月》接口说明文档给的域名，跟上面 Token 计费接口不是同一组、不是同一个签名规则
 const CHANNEL_LOGIN_BASE_URL = (process.env.MIGU_CHANNEL_LOGIN_BASE_URL?.trim() || 'https://hz.migu.cn').replace(/\/$/, '')
 const CHANNEL_LOGIN_PATH = '/order/rest/crbt/centrality/secret/url.do'
+const PUBLISH_VIDEO_EXTENSIONS = new Set([
+  'mp4',
+  'mp3',
+  'avi',
+  'wav',
+  'flv',
+  'mpeg',
+  'vob',
+  'm4v',
+  'mkv',
+  'wm',
+  'rmvb',
+  'mpg',
+  'wmv',
+  '3gp',
+  'mov',
+  'rm',
+  'asf',
+  'webm',
+  'm4a',
+  'wma',
+  'flac',
+  'aac',
+  'caf',
+])
+const PUBLISH_COVER_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'tif', 'bmp', 'webp', 'ico'])
 
 function getConfig() {
   return {
@@ -196,6 +222,8 @@ export async function buildPublishRedirectUrl({
   if (!videoUrl) throw new Error('缺少发布视频地址。')
   if (!videoCover) throw new Error('缺少视频封面地址。')
   if (!resolvedProjectId) throw new Error('咪咕登录回调及服务端配置均未提供 projectId，无法打开视频彩铃发布页。')
+  validatePublishMediaUrl(videoUrl, PUBLISH_VIDEO_EXTENSIONS, '视频')
+  validatePublishMediaUrl(videoCover, PUBLISH_COVER_EXTENSIONS, '视频封面')
 
   const token = await mintCToken()
   const params = new URLSearchParams({
@@ -210,6 +238,14 @@ export async function buildPublishRedirectUrl({
   if (otherSet) params.set('otherSet', otherSet)
   if (isMiniPublish) params.set('isMiniPublish', isMiniPublish)
   return `${PUBLISH_PAGE_BASE}?${params.toString()}`
+}
+
+export function validatePublishMediaUrl(value, allowedExtensions, label) {
+  if (value.length > 200) throw new Error(`${label}地址超过咪咕要求的 200 个字符，请使用更短的公网地址。`)
+  const url = new URL(value)
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error(`${label}地址必须使用 HTTP(S)。`)
+  const extension = url.pathname.split('.').pop()?.toLowerCase() || ''
+  if (!allowedExtensions.has(extension)) throw new Error(`${label}地址缺少咪咕支持的文件后缀。`)
 }
 
 // 分贝明细页（Token 使用明细）：直接打开即可，不需要跳转再回调

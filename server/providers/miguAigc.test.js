@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildPublishRedirectUrl, buildTaskIdRedirectUrl, hasUsableTokenEntitlement } from './miguAigc.js'
+import {
+  buildPublishRedirectUrl,
+  buildTaskIdRedirectUrl,
+  hasUsableTokenEntitlement,
+  validatePublishMediaUrl,
+} from './miguAigc.js'
 
 test('requires a positive entitlement count before requesting taskId', () => {
   assert.equal(hasUsableTokenEntitlement(null), false)
@@ -105,4 +110,17 @@ test('uses login callback publish parameters and omits optional values when abse
       else process.env[key] = value
     }
   }
+})
+
+test('rejects unsupported or overly long publish media URLs before minting a token', () => {
+  const videoExtensions = new Set(['mp4'])
+  assert.doesNotThrow(() => validatePublishMediaUrl('https://cdn.example.com/video.mp4', videoExtensions, '视频'))
+  assert.throws(
+    () => validatePublishMediaUrl('https://cdn.example.com/video', videoExtensions, '视频'),
+    /文件后缀/,
+  )
+  assert.throws(
+    () => validatePublishMediaUrl(`https://cdn.example.com/${'a'.repeat(190)}.mp4`, videoExtensions, '视频'),
+    /200 个字符/,
+  )
 })

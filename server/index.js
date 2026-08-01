@@ -299,7 +299,15 @@ function getFallbackChatReply(message) {
 app.use(cors(process.env.CORS_ORIGIN ? { origin: process.env.CORS_ORIGIN.split(',') } : undefined))
 app.use(express.json())
 app.use('/templates', express.static(path.join(__dirname, '..', 'public', 'templates')))
-app.use('/generated-videos', express.static(generatedVideosRoot))
+app.use(
+  '/generated-videos',
+  express.static(generatedVideosRoot, {
+    setHeaders: (response, filePath) => {
+      // 咪咕彩铃发布页明确要求 mp4 地址响应 Content-Type 为 video/mp4。
+      if (path.extname(filePath).toLowerCase() === '.mp4') response.setHeader('Content-Type', 'video/mp4')
+    },
+  }),
+)
 // 公网访问直接走这里的生产构建（npm run build 产物），比 vite 开发模式快得多
 app.use(express.static(path.join(__dirname, '..', 'dist')))
 
