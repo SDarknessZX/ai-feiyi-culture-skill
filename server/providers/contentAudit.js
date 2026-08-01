@@ -198,7 +198,8 @@ export async function auditContent({ kind, content, contentId, description }) {
 
   const payload = await response.json().catch(() => null)
   if (!payload || payload.code !== '000000') {
-    const error = new Error(payload?.info || '机审接口返回了未知错误。')
+    const detail = payload?.info || '机审接口返回了未知错误。'
+    const error = new Error(`${detail}（code=${payload?.code || 'UNKNOWN'}）`)
     if (waitForCallback) settlePendingAudit(dataId, () => {})
     throw error
   }
@@ -241,4 +242,8 @@ export async function checkContent({ kind, content, contentId, description }) {
       error: error instanceof Error ? error.message : String(error),
     }
   }
+}
+
+export function isAuditServiceUnavailable(result) {
+  return Boolean(result?.skipped && result?.error)
 }

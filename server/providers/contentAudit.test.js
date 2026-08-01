@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { checkContent } from './contentAudit.js'
+import { checkContent, isAuditServiceUnavailable } from './contentAudit.js'
 
 test('handles an audit service business error without an unhandled rejection', async () => {
   const previous = {
@@ -31,6 +31,8 @@ test('handles an audit service business error without an unhandled rejection', a
     assert.equal(result.passed, false)
     assert.equal(result.label, 'ERROR_FAIL_CLOSED')
     assert.match(result.error, /系统繁忙/)
+    assert.match(result.error, /code=199999/)
+    assert.equal(isAuditServiceUnavailable(result), true)
 
     // Let the microtask queue drain; the test runner will flag any leaked rejection.
     await new Promise((resolve) => setImmediate(resolve))

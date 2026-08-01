@@ -23,7 +23,12 @@ import {
   queryVideoGenerationTask,
   submitImageToVideoTask,
 } from './providers/arkVideo.js'
-import { checkContent, getContentAuditConfigReport, handleAuditCallback } from './providers/contentAudit.js'
+import {
+  checkContent,
+  getContentAuditConfigReport,
+  handleAuditCallback,
+  isAuditServiceUnavailable,
+} from './providers/contentAudit.js'
 import {
   buildLoginRedirectUrl,
   buildPublishRedirectUrl,
@@ -602,6 +607,13 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
   })
   if (!inputAudit.passed) {
     await cleanupUpload(request)
+    if (isAuditServiceUnavailable(inputAudit)) {
+      return response.status(503).json({
+        status: 'failed',
+        mode: input.mode,
+        message: '内容审核服务暂时不可用，请稍后重试；本次并非判定为内容违规。',
+      })
+    }
     return response.status(422).json({
       status: 'failed',
       mode: input.mode,
@@ -699,6 +711,13 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
     description: `${input.mode} 创作输入图片`,
   })
   if (!inputAudit.passed) {
+    if (isAuditServiceUnavailable(inputAudit)) {
+      return response.status(503).json({
+        status: 'failed',
+        mode: input.mode,
+        message: '内容审核服务暂时不可用，请稍后重试；本次并非判定为内容违规。',
+      })
+    }
     return response.status(422).json({
       status: 'failed',
       mode: input.mode,
@@ -864,6 +883,15 @@ app.get('/api/tasks/:taskId', async (request, response) => {
         description: `${mode} 生成结果视频`,
       })
       if (!outputAudit.passed) {
+        if (isAuditServiceUnavailable(outputAudit)) {
+          return response.status(503).json({
+            taskId,
+            status: 'running',
+            mode,
+            message: '视频已生成，正在等待内容审核服务恢复，请稍候。',
+            ...(templateTitle ? { templateTitle } : {}),
+          })
+        }
         await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
         return response.json({
           taskId,
