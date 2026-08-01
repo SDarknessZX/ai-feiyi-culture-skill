@@ -267,6 +267,14 @@ export async function queryTokenRemainCount({ otoken, modelValue }) {
   })
 }
 
+export function hasUsableTokenEntitlement(data) {
+  if (!data || typeof data !== 'object') return false
+  return ['rightsCount', 'experienceCount', 'availablePointsCount'].some((key) => {
+    const count = Number(data[key])
+    return Number.isFinite(count) && count > 0
+  })
+}
+
 export async function preDeductToken({ otoken, taskId, contentType, modelValue, rcToken }) {
   return callSignedApi('/open/api/user/ai-charging/pre/reduce/v1.0', otoken, {
     taskId,

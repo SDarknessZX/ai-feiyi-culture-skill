@@ -88,6 +88,7 @@ npm.cmd run migrate:compliance
 - `prompts/`：后台提示词
 - `generated-videos/`：TOS 归档失败时的本地视频缓存
 - `server/data/works.db`：已归档作品索引
+- `server/data/migu-tasks.db`：咪咕 taskId、任务状态及 Token 结算状态持久化记录，用于问题排查
 
 `uploads/` 是运行时临时目录，图片上传完成后后端会自动删除。
 

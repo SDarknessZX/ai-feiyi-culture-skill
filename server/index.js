@@ -33,12 +33,14 @@ import {
   decryptMiguMsisdn,
   getMiguAigcConfigReport,
   getModelValueForMode,
+  hasUsableTokenEntitlement,
   isTokenGatingEnabled,
   preDeductToken,
   queryTokenRemainCount,
   reportInteraction,
   reportTokenResult,
 } from './providers/miguAigc.js'
+import { recordMiguTokenTask, updateMiguTokenSettlement, updateMiguTokenTaskState } from './providers/miguTaskStore.js'
 import { cacheGeneratedVideo } from './providers/generatedVideoStorage.js'
 import { archiveGeneratedVideo, ensureArchivedVideoPoster } from './providers/videoArchive.js'
 import { createCompliantVideoBuffer, getVideoComplianceConfigReport } from './providers/videoCompliance.js'
@@ -112,6 +114,7 @@ setInterval(() => {
 async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
   try {
     updateJob(jobId, { status: 'running' })
+    updateMiguTokenTaskState(jobId, 'running')
 
     if (mode === 'food') {
       updateJob(jobId, { message: '正在识别美食并生成专属提示词...' })
@@ -145,10 +148,12 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
     const task = await submitImageToVideoTask({ mode, imageUrl, prompt: style.prompt })
     updateJob(jobId, { arkTaskId: task.taskId, message: task.message })
   } catch (error) {
+    const message = error instanceof Error ? error.message : '任务处理失败。'
     updateJob(jobId, {
       status: 'failed',
-      message: error instanceof Error ? error.message : '任务处理失败。',
+      message,
     })
+    updateMiguTokenTaskState(jobId, 'failed', message)
     // 已经完成 Token 预扣，但后台任务未能成功提交时立即撤销；即使用户关闭页面也不会一直占用预扣权益。
     await settleTokenOutcomeIfNeeded(jobId, false, {})
   } finally {
@@ -233,9 +238,12 @@ async function settleTokenOutcomeIfNeeded(jobId, succeeded, { inputImageUrl, vid
         await cancelTokenTask({ otoken: job.miguOtoken, taskId: job.miguTaskId })
       }
       updateJob(jobId, { tokenSettlementStatus: 'settled', tokenSettlementOutcome: succeeded ? 'reported' : 'cancelled' })
+      updateMiguTokenSettlement(jobId, 'settled', succeeded ? 'reported' : 'cancelled')
       return true
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       updateJob(jobId, { tokenSettlementStatus: 'pending' })
+      updateMiguTokenSettlement(jobId, 'pending', '', message)
       console.error(
         `[migu] Token ${succeeded ? '使用结果上报' : '预扣撤销'}失败（jobId=${jobId}, miguTaskId=${job.miguTaskId}），等待下次重试：`,
         error,
@@ -346,18 +354,26 @@ app.get('/api/migu/usage-detail-url', (request, response) => {
 app.get('/api/migu/token-gating', (_request, response) => {
   response.json({ enabled: isTokenGatingEnabled() })
 })
-app.get('/api/migu/task-id-url', (request, response) => {
+app.get('/api/migu/task-id-url', async (request, response) => {
   const btoken = String(request.query.btoken || '').trim()
   const mode = String(request.query.mode || '').trim()
   const modelValue = getModelValueForMode(mode)
+  if (!btoken) {
+    return response.status(401).json({ message: '缺少 btoken，请先完成登录。' })
+  }
   if (!modelValue) {
     return response.status(400).json({ message: `不支持的玩法模态：${mode || '（空）'}` })
   }
   try {
+    // 文档要求拉起 taskId 页面之前必须先查询权益；查询异常或无可用权益一律不放行。
+    const tokenRemain = await queryTokenRemainCount({ otoken: btoken, modelValue })
+    if (!hasUsableTokenEntitlement(tokenRemain)) {
+      return response.status(402).json({ message: '当前没有可用的 AI 创作权益，请先开通或领取权益。', tokenRemain })
+    }
     const url = buildTaskIdRedirectUrl({ btoken, modelValue, contentType: 'video' })
-    response.json({ url })
+    response.json({ url, tokenRemain })
   } catch (error) {
-    response.status(400).json({ message: error instanceof Error ? error.message : '无法生成获取 taskId 页面地址。' })
+    response.status(502).json({ message: error instanceof Error ? error.message : 'Token 权益查询失败，无法获取 taskId。' })
   }
 })
 app.get('/api/migu/token/remain', async (request, response) => {
@@ -689,32 +705,40 @@ app.post('/api/create/start', rateLimitCreate, async (request, response) => {
     return response.status(400).json({ status: 'failed', message: '请求参数不正确。' })
   }
   const input = parsed.data
+  const jobId = `job-${crypto.randomUUID()}`
+  recordMiguTokenTask({ jobId, miguTaskId: input.taskId, mode: input.mode })
 
   const styleCheck = resolveStyle(input.mode, input.template)
   if (styleCheck.error) {
+    updateMiguTokenTaskState(jobId, 'request_rejected', styleCheck.error.message)
     return response.status(styleCheck.status).json({ status: 'failed', mode: input.mode, ...styleCheck.error })
   }
 
   const modelValue = getModelValueForMode(input.mode)
   if (!modelValue) {
+    const message = `未配置「${input.mode}」对应的咪咕模态值（modelValue），请检查 .env。`
+    updateMiguTokenTaskState(jobId, 'request_rejected', message)
     return response.status(500).json({
       status: 'failed',
       mode: input.mode,
-      message: `未配置「${input.mode}」对应的咪咕模态值（modelValue），请检查 .env。`,
+      message,
     })
   }
 
   try {
     await preDeductToken({ otoken: input.otoken, taskId: input.taskId, contentType: 'video', modelValue })
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Token 权益不足或校验失败，请稍后重试。'
+    updateMiguTokenTaskState(jobId, 'reduce_failed', message)
     return response.status(402).json({
       status: 'failed',
       mode: input.mode,
-      message: error instanceof Error ? error.message : 'Token 权益不足或校验失败，请稍后重试。',
+      message,
     })
   }
 
-  const jobId = `job-${crypto.randomUUID()}`
+  updateMiguTokenTaskState(jobId, 'pre_deducted')
+  updateMiguTokenSettlement(jobId, 'pending')
   const templateTitle = input.templateTitle || styleCheck.templateTitle
   jobs.set(jobId, {
     status: 'queued',

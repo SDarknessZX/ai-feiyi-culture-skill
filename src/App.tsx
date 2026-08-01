@@ -627,8 +627,11 @@ function App() {
   useEffect(() => {
     const search = new URLSearchParams(window.location.search)
     const taskId = search.get('taskId')
+    const resumeCode = search.get('resumeCode')
+    const code = search.get('code')
+    const callbackInfo = search.get('info')
     const taskIdWasPending = window.sessionStorage.getItem(miguTaskIdPendingKey) === '1'
-    if (!taskId && !taskIdWasPending) return
+    if (!taskId && !resumeCode && !code && !taskIdWasPending) return
 
     window.sessionStorage.removeItem(miguTaskIdPendingKey)
     search.delete('taskId')
@@ -642,8 +645,19 @@ function App() {
     window.sessionStorage.removeItem(pendingCreationStorageKey)
     const session = readMiguSession()
 
+    if (code === '200002') {
+      setToast(callbackInfo || '渠道校验失败，请联系咪咕确认渠道配置')
+      return
+    }
+    // code=200001 表示已有正在执行的任务，咪咕会同时返回该 taskId，应当继续使用而不是按 resumeCode=4 拒绝。
+    const taskIdSucceeded = Boolean(taskId) && (resumeCode === '3' || code === '200001')
+    if (!taskIdSucceeded) {
+      if (resumeCode === '4') setToast(callbackInfo || '获取 taskId 失败，请重试')
+      else if (taskIdWasPending) setToast(callbackInfo || '获取创作资格失败，请重试')
+      return
+    }
     if (!taskId || !pendingRaw || !session?.btoken) {
-      if (taskIdWasPending) setToast('获取创作资格失败，请重试')
+      if (taskIdWasPending) setToast(callbackInfo || '获取创作资格失败，请重试')
       return
     }
 
