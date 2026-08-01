@@ -8,6 +8,7 @@
     "web": "vite --host 0.0.0.0 --port 5188 --strictPort",
     "dev": "concurrently \"npm:api\" \"npm:web\"",
     "start": "node server/index.js",
+    "configure:audit": "node scripts/configure-content-audit.mjs",
     "migrate:compliance": "node server/migrateVideoCompliance.js",
     "test:compliance": "node --test server/providers/videoCompliance.test.js server/providers/contentAudit.test.js",
     "test:face-detect": "node --test server/providers/faceDetection.test.js",
