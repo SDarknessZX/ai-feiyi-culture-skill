@@ -441,7 +441,7 @@ function App() {
   const [works, setWorks] = useState<WorkItem[]>(loadWorks)
   const [mode, setMode] = useState<ModeId>('costume')
   const [chatMode, setChatMode] = useState<ModeId>('costume')
-  const [gender] = useState<GenderId>('female')
+  const [gender, setGender] = useState<GenderId | null>(null)
   const [costumeStyle, setCostumeStyle] = useState('ethnic-miao')
   const [paintingStyle, setPaintingStyle] = useState(paintingStyles[0].id)
   const [foodShowcase, setFoodShowcase] = useState('茶点')
@@ -1271,7 +1271,7 @@ function App() {
     formData.append('mode', targetMode)
     const template = templateIdFor(targetMode)
     if (template) formData.append('template', template)
-    formData.append('gender', gender)
+    formData.append('gender', gender || 'female')
 
     try {
       const response = await fetch('/api/create', { method: 'POST', body: formData })
@@ -1296,7 +1296,7 @@ function App() {
     formData.append('image', file)
     formData.append('mode', targetMode)
     if (template) formData.append('template', template)
-    formData.append('gender', gender)
+    formData.append('gender', gender || 'female')
 
     try {
       const prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
@@ -1316,7 +1316,7 @@ function App() {
       const pending: PendingCreation = {
         mode: targetMode,
         template,
-        gender,
+        gender: gender || 'female',
         templateTitle: prepared.templateTitle || modeLabels[targetMode],
         imageUrl: prepared.imageUrl,
       }
@@ -1410,6 +1410,12 @@ function App() {
       if (targetMode !== mode) setMode(targetMode)
       setToast('请上传你的创意图片或选择参考图')
       requestUpload()
+      return
+    }
+
+    if (targetMode === 'costume' && !gender) {
+      setToast('请选择性别')
+      setShowCreationPanel(true)
       return
     }
 
@@ -1734,6 +1740,7 @@ function App() {
           activeMode={activeMode}
           acceptedAgreement={acceptedAgreement}
           imageReviewing={imageReviewing}
+          gender={gender}
           mode={mode}
           preview={preview}
           samples={sampleImagesByMode[mode]}
@@ -1757,6 +1764,7 @@ function App() {
             setShowCreationPanel(false)
             void createVideo()
           }}
+          onGenderChange={setGender}
           onChooseMode={(nextMode) => {
             setMode(nextMode)
             if (!drafts[nextMode].file) void chooseSampleImage(nextMode, sampleImagesByMode[nextMode][0])
@@ -3167,6 +3175,7 @@ function CropSheet({
 function CreationPanel({
   acceptedAgreement,
   activeMode,
+  gender,
   imageReviewing,
   mode,
   preview,
@@ -3177,6 +3186,7 @@ function CreationPanel({
   onClose,
   onCreate,
   onChooseMode,
+  onGenderChange,
   onPreviewImage,
   onRemoveImage,
   onOpenUsageNotice,
@@ -3186,6 +3196,7 @@ function CreationPanel({
 }: {
   acceptedAgreement: boolean
   activeMode: ModeConfig
+  gender: GenderId | null
   imageReviewing: boolean
   mode: ModeId
   preview: string
@@ -3196,6 +3207,7 @@ function CreationPanel({
   onClose: () => void
   onCreate: () => void
   onChooseMode: (mode: ModeId) => void
+  onGenderChange: (gender: GenderId) => void
   onPreviewImage: (src: string) => void
   onRemoveImage: () => void
   onOpenUsageNotice: () => void
@@ -3209,7 +3221,7 @@ function CreationPanel({
   return (
     <div className="sheet-backdrop panel-backdrop" role="presentation" onClick={onClose}>
       <section
-        className="bottom-sheet creation-panel"
+        className={`bottom-sheet creation-panel mode-${mode}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="creation-title"
@@ -3261,7 +3273,35 @@ function CreationPanel({
             </button>
           ))}
         </div>
-        <h2>2. 模板随心选</h2>
+        {mode === 'costume' && (
+          <>
+            <h2>
+              2. 请选择性别
+              <small>用于匹配服饰与人物造型</small>
+            </h2>
+            <div className="gender-choice" role="radiogroup" aria-label="请选择性别">
+              <button
+                className={gender === 'female' ? 'selected' : ''}
+                type="button"
+                role="radio"
+                aria-checked={gender === 'female'}
+                onClick={() => onGenderChange('female')}
+              >
+                女性
+              </button>
+              <button
+                className={gender === 'male' ? 'selected' : ''}
+                type="button"
+                role="radio"
+                aria-checked={gender === 'male'}
+                onClick={() => onGenderChange('male')}
+              >
+                男性
+              </button>
+            </div>
+          </>
+        )}
+        <h2>{mode === 'costume' ? '3. 模板随心选' : '2. 模板随心选'}</h2>
         <div className="asset-strip template-choice-strip">
           {templates.map((item) => (
             <button

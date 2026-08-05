@@ -2989,6 +2989,11 @@ button:disabled {
   padding: 8px 14px calc(42px + env(safe-area-inset-bottom));
 }
 
+.creation-panel.mode-costume {
+  height: min(65svh, 530px);
+  max-height: min(65svh, 530px);
+}
+
 .creation-panel::after {
   position: absolute;
   bottom: calc(8px + env(safe-area-inset-bottom));
@@ -3041,6 +3046,30 @@ button:disabled {
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.gender-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+
+.gender-choice button {
+  min-height: 36px;
+  border: 1px solid #dce5f3;
+  border-radius: 8px;
+  color: #59677b;
+  background: #f4f7fb;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gender-choice button.selected {
+  border-color: #447cff;
+  color: #2467f2;
+  background: #edf3ff;
+  box-shadow: inset 0 0 0 1px #447cff;
 }
 
 .asset-strip {
