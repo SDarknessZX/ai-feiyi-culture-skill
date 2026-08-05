@@ -68,7 +68,8 @@ def main() -> None:
     parser.add_argument(
         "--score-threshold",
         type=float,
-        default=float(os.getenv("FACE_DETECT_SCORE_THRESHOLD", "0.8")),
+        # 0.8 对黑白、柔光和低对比度人像容易漏检；0.65 在保留人脸门槛的同时提高召回率。
+        default=float(os.getenv("FACE_DETECT_SCORE_THRESHOLD", "0.65")),
     )
     parser.add_argument(
         "--nms-threshold",
