@@ -166,6 +166,9 @@ const usageAcceptedStorageKey = 'ai-yitu-zhenying-usage-accepted-202605'
 const mediaPermissionStorageKey = 'ai-yitu-zhenying-media-permission'
 const cameraPermissionStorageKey = 'ai-yitu-zhenying-camera-permission'
 const galleryPermissionStorageKey = 'ai-yitu-zhenying-gallery-permission'
+// TEMP: 对方登录接口联调完成前，临时旁路咪咕登录与 Token 计费入口，方便功能验收。
+// 恢复方式：将此处改为 false；登录弹窗、回调和后端接口均保留未删除。
+const temporarilyBypassMiguLogin = true
 const miguSessionStorageKey = 'ai-yitu-zhenying-migu-session'
 const miguLoginPendingKey = 'ai-yitu-zhenying-migu-login-pending'
 // btoken 官方有效期 1 小时，这里留一点余量提前判过期，避免临界点上用过期 token 发请求
@@ -794,6 +797,11 @@ function App() {
   }, [view])
 
   useEffect(() => {
+    // TEMP: 测试期间不启用依赖登录态的 Token 计费链路，创作会走原有直连接口。
+    if (temporarilyBypassMiguLogin) {
+      setTokenGatingEnabled(false)
+      return
+    }
     let cancelled = false
     void (async () => {
       try {
@@ -913,7 +921,8 @@ function App() {
     setPreviewImageUrl('')
     closeUploadOverlays()
 
-    if (!isLoggedIn) {
+    // TEMP: 登录接口联调完成后，关闭 temporarilyBypassMiguLogin 即恢复此登录拦截。
+    if (!temporarilyBypassMiguLogin && !isLoggedIn) {
       setShowLoginDialog(true)
       return
     }
@@ -1586,10 +1595,12 @@ function App() {
           <Info size={14} />
         </button>
         <div className="topbar-actions">
-          <button className="credit-badge" type="button" onClick={() => void openUsageDetail()} aria-label="查看分贝明细">
-            <Sparkles size={13} />
-            {tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? '--'}
-          </button>
+          {!temporarilyBypassMiguLogin && (
+            <button className="credit-badge" type="button" onClick={() => void openUsageDetail()} aria-label="查看分贝明细">
+              <Sparkles size={13} />
+              {tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? '--'}
+            </button>
+          )}
           <button className="works-pill" type="button" onClick={() => setView(view === 'library' ? 'home' : 'library')}>
             我的作品
           </button>
@@ -1687,8 +1698,14 @@ function App() {
         />
       )}
 
-      {showInfo && <InfoModal onClose={() => setShowInfo(false)} onViewUsageDetail={openUsageDetail} />}
-      {showLoginDialog && <LoginDialog onCancel={closeLoginDialog} onConfirm={confirmLogin} />}
+      {showInfo && (
+        <InfoModal
+          loginTemporarilyDisabled={temporarilyBypassMiguLogin}
+          onClose={() => setShowInfo(false)}
+          onViewUsageDetail={openUsageDetail}
+        />
+      )}
+      {!temporarilyBypassMiguLogin && showLoginDialog && <LoginDialog onCancel={closeLoginDialog} onConfirm={confirmLogin} />}
       {showUsageNotice && <UsageNoticeSheet onAccept={confirmUsageNotice} onClose={closeUsageNotice} />}
       {showMediaSourceSheet && (
         <MediaSourceSheet onCancel={closeMediaSourceSheet} onChoose={chooseMediaSource} />
@@ -3305,7 +3322,15 @@ function ImagePreviewModal({ src, onClose, onReplace }: { src: string; onClose: 
   )
 }
 
-function InfoModal({ onClose, onViewUsageDetail }: { onClose: () => void; onViewUsageDetail: () => void }) {
+function InfoModal({
+  loginTemporarilyDisabled,
+  onClose,
+  onViewUsageDetail,
+}: {
+  loginTemporarilyDisabled: boolean
+  onClose: () => void
+  onViewUsageDetail: () => void
+}) {
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-title">
@@ -3314,12 +3339,15 @@ function InfoModal({ onClose, onViewUsageDetail }: { onClose: () => void; onView
         </button>
         <h2 id="info-title">应用说明</h2>
         <p>
-          1、本服务由<strong>{serviceProviderName}</strong>提供，需要登录后方可使用。
+          1、本服务由<strong>{serviceProviderName}</strong>提供
+          {loginTemporarilyDisabled ? '，当前测试期间可直接使用。' : '，需要登录后方可使用。'}
         </p>
         <p>2、应用在标注“活动体验”期间无需支付使用费用。在没有标注“活动体验”时使用创作服务就会开始收费（收费标准结合AI研发和算力成本制定）。</p>
-        <button className="usage-detail-link" type="button" onClick={onViewUsageDetail}>
-          查看 Token 使用明细
-        </button>
+        {!loginTemporarilyDisabled && (
+          <button className="usage-detail-link" type="button" onClick={onViewUsageDetail}>
+            查看 Token 使用明细
+          </button>
+        )}
         <button type="button" onClick={onClose}>
           知道了
         </button>
