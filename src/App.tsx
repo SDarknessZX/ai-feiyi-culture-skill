@@ -1296,18 +1296,20 @@ function App() {
     return data
   }
 
-  async function finishCropAndCreate() {
+  async function finishCropAndCreate(croppedFile: File) {
     if (!file) {
       setToast('请重新上传图片')
       restorePreviousPanel()
       return
     }
 
+    const croppedPreview = URL.createObjectURL(croppedFile)
+    updateDraft(mode, { file: croppedFile, preview: croppedPreview })
     setShowCropSheet(false)
     if (mode === 'costume') {
       setFaceReviewing(true)
       try {
-        const faceResult = await validateFace(file)
+        const faceResult = await validateFace(croppedFile)
         if (!faceResult.hasFace) {
           setToast(faceResult.message || '未检测到清晰人脸，请重新上传')
           restorePreviousPanel()
@@ -1324,7 +1326,7 @@ function App() {
 
     returnToCreationPanelRef.current = false
     setToast(mode === 'costume' ? '人脸校验通过，正在发起创作' : '图片校验通过，正在发起创作')
-    void createVideo()
+    void createVideo(mode, { file: croppedFile, preview: croppedPreview })
   }
 
   function removeUploadedImage() {
@@ -1884,7 +1886,7 @@ function App() {
       )}
 
       {view === 'detail' && selectedTemplate && (
-        <TemplateDetail activeMode={activeMode} template={selectedTemplate} onBack={returnHome} onUse={useSameTemplate} />
+        <TemplateDetail template={selectedTemplate} onBack={returnHome} onUse={useSameTemplate} />
       )}
 
       {view === 'chat' && (
@@ -1910,6 +1912,7 @@ function App() {
         <LibraryView
           balance={typeof visibleBalance === 'number' ? visibleBalance : undefined}
           drafts={drafts}
+          onBack={leaveLibrary}
           onDelete={deleteWork}
           onClearDraft={clearDraftResult}
           onOpenBalance={() => setShowBalanceDetail(true)}
@@ -1997,7 +2000,7 @@ function App() {
           cropRatio={cropRatio}
           preview={preview}
           onClose={restorePreviousPanel}
-          onConfirm={() => void finishCropAndCreate()}
+          onConfirm={finishCropAndCreate}
           onRatioChange={setCropRatio}
           onRequestUpload={requestUpload}
         />
@@ -2369,12 +2372,10 @@ function TemplateCarousel({
 }
 
 function TemplateDetail({
-  activeMode,
   template,
   onBack,
   onUse,
 }: {
-  activeMode: ModeConfig
   template: TemplateItem
   onBack: () => void
   onUse: () => void
@@ -2462,7 +2463,6 @@ function TemplateDetail({
         {template.videoUrl && isMuted && <div className="sound-hint">点击播放开启声音</div>}
         <div className="detail-caption">
           <strong>{template.title}</strong>
-          <span>AI生成 · {activeMode.short}</span>
         </div>
       </div>
       <button className="detail-use" type="button" onClick={onUse}>
@@ -2874,6 +2874,7 @@ function LibraryView({
   balance,
   drafts,
   works,
+  onBack,
   onClearDraft,
   onDelete,
   onPickMode,
@@ -2884,6 +2885,7 @@ function LibraryView({
   balance?: number
   drafts: Record<ModeId, ModeDraft>
   works: WorkItem[]
+  onBack: () => void
   onClearDraft: (mode: ModeId) => void
   onDelete: (id: string) => void
   onPickMode: (mode: ModeId) => void
@@ -2939,6 +2941,9 @@ function LibraryView({
   return (
     <section className="library-view">
       <div className="library-titlebar">
+        <button type="button" onClick={onBack} aria-label="返回上一页">
+          <ArrowLeft size={21} />
+        </button>
         <h1>我的作品</h1>
         <button className="usage-detail" type="button" onClick={onOpenBalance}>
           {balance ?? '--'} 分贝&nbsp;&nbsp;使用明细
@@ -3436,13 +3441,17 @@ function CropSheet({
   cropRatio: CropRatio
   preview: string
   onClose: () => void
-  onConfirm: () => void
+  onConfirm: (file: File) => void | Promise<void>
   onRatioChange: (ratio: CropRatio) => void
   onRequestUpload: () => void
 }) {
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 })
   const [freeFrame, setFreeFrame] = useState({ width: 72, height: 58 })
+  const [isExporting, setIsExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
   const cropStageRef = useRef<HTMLDivElement | null>(null)
+  const cropImageRef = useRef<HTMLImageElement | null>(null)
+  const cropFrameRef = useRef<HTMLDivElement | null>(null)
   const pointersRef = useRef(new Map<number, { x: number; y: number }>())
   const freeResizeRef = useRef({
     pointerId: -1,
@@ -3551,6 +3560,59 @@ function CropSheet({
     freeResizeRef.current.pointerId = -1
   }
 
+  async function exportCrop() {
+    const stage = cropStageRef.current
+    const image = cropImageRef.current
+    const frame = cropFrameRef.current
+    if (!stage || !image || !frame || !image.naturalWidth || !image.naturalHeight || isExporting) return
+
+    setIsExporting(true)
+    setExportError('')
+    try {
+      const stageBounds = stage.getBoundingClientRect()
+      const frameBounds = frame.getBoundingClientRect()
+      const imageAspect = image.naturalWidth / image.naturalHeight
+      const stageAspect = stageBounds.width / stageBounds.height
+      const containedWidth = imageAspect > stageAspect ? stageBounds.width : stageBounds.height * imageAspect
+      const containedHeight = imageAspect > stageAspect ? stageBounds.width / imageAspect : stageBounds.height
+      const renderedWidth = containedWidth * transform.scale
+      const renderedHeight = containedHeight * transform.scale
+      const imageLeft = (stageBounds.width - containedWidth) / 2 + transform.x + (containedWidth - renderedWidth) / 2
+      const imageTop = (stageBounds.height - containedHeight) / 2 + transform.y + (containedHeight - renderedHeight) / 2
+      const frameLeft = frameBounds.left - stageBounds.left
+      const frameTop = frameBounds.top - stageBounds.top
+
+      const outputWidth = 1080
+      const outputHeight = Math.max(1, Math.min(1920, Math.round(outputWidth * (frameBounds.height / frameBounds.width))))
+      const canvas = document.createElement('canvas')
+      canvas.width = outputWidth
+      canvas.height = outputHeight
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('当前浏览器不支持图片裁剪')
+
+      context.fillStyle = '#000'
+      context.fillRect(0, 0, outputWidth, outputHeight)
+      const outputScaleX = outputWidth / frameBounds.width
+      const outputScaleY = outputHeight / frameBounds.height
+      context.drawImage(
+        image,
+        (imageLeft - frameLeft) * outputScaleX,
+        (imageTop - frameTop) * outputScaleY,
+        renderedWidth * outputScaleX,
+        renderedHeight * outputScaleY,
+      )
+
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+      if (!blob) throw new Error('裁剪图片生成失败')
+      const croppedFile = new File([blob], `cropped-${Date.now()}.jpg`, { type: blob.type, lastModified: Date.now() })
+      await onConfirm(croppedFile)
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : '裁剪图片生成失败，请重试')
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
   return (
     <div className="sheet-backdrop crop-backdrop" role="presentation">
       <section className="bottom-sheet crop-sheet" role="dialog" aria-modal="true" aria-labelledby="crop-title">
@@ -3560,8 +3622,8 @@ function CropSheet({
             重新选择
           </button>
           <h2 id="crop-title">编辑图片</h2>
-          <button type="button" onClick={onConfirm}>
-            确定
+          <button type="button" onClick={() => void exportCrop()} disabled={isExporting}>
+            {isExporting ? '处理中…' : '确定'}
           </button>
         </div>
         <div
@@ -3574,6 +3636,7 @@ function CropSheet({
         >
           {preview ? (
             <img
+              ref={cropImageRef}
               src={preview}
               alt="裁剪预览"
               draggable={false}
@@ -3585,6 +3648,7 @@ function CropSheet({
             <ImageUp size={30} />
           )}
           <div
+            ref={cropFrameRef}
             className={`crop-frame ratio-${cropRatio.replace(':', '-')}`}
             style={cropRatio === 'free' ? { width: `${freeFrame.width}%`, height: `${freeFrame.height}%` } : undefined}
           >
@@ -3618,6 +3682,7 @@ function CropSheet({
             ? '拖动裁剪框右下角可自由调整宽高，同时支持拖动图片或双指缩放。'
             : '请将人物等主体置于框内中央，可通过拖动或双指缩放裁剪图片。'}
         </p>
+        {exportError && <p className="crop-error" role="alert">{exportError}</p>}
         <button className="sheet-secondary" type="button" onClick={onClose}>
           稍后再编辑
         </button>

@@ -1169,6 +1169,10 @@ button:disabled {
   min-height: 48px;
 }
 
+.view-library > .app-topbar {
+  display: none;
+}
+
 .library-titlebar button {
   display: grid;
   width: 34px;
@@ -1926,6 +1930,16 @@ button:disabled {
   text-align: center;
 }
 
+.crop-sheet .crop-error {
+  color: #d92d20;
+  font-weight: 700;
+}
+
+.crop-header button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .panel-backdrop {
   background: rgba(18, 24, 35, 0.38);
 }
@@ -2340,6 +2354,13 @@ button:disabled {
 .detail-media .ai-content-page-mark {
   right: 18px;
   bottom: 88px;
+  min-height: 20px;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 7px;
+  background: rgba(0, 0, 0, 0.52);
+  box-shadow: none;
+  font-weight: 500;
 }
 
 .video-player > .ai-content-page-mark {
@@ -4095,10 +4116,6 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-}
-
-.library-titlebar {
-  grid-template-columns: 1fr auto;
 }
 
 .library-titlebar .usage-detail {
