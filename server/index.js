@@ -1,5 +1,5 @@
 import cors from 'cors'
-import 'dotenv/config'
+import './loadEnv.js'
 import express from 'express'
 import multer from 'multer'
 import crypto from 'node:crypto'
