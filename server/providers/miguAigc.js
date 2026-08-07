@@ -104,9 +104,8 @@ function formatDateTimestamp(date) {
 }
 
 function getChannelLoginConfig() {
-  // SKILL 凭证目前只发了一个 appSecret，文档里登陆接口自己的"签名密钥"/"免鉴权登录秘钥"
-  // 没给独立的值——默认两个都复用 appSecret，如果联调发现签名对不上，说明咪咕确实分配了
-  // 独立密钥，到时候单独在 .env 里配 MIGU_CHANNEL_LOGIN_SIGN_KEY / MIGU_CHANNEL_LOGIN_KEY 覆盖即可
+  // 渠道登录的 key 字段秘钥与 signature 合成秘钥由咪咕分别下发，不能互换。
+  // 保留 appSecret 回退只为兼容旧环境；生产配置必须显式填写下面两个独立变量。
   const appSecret = process.env.MIGU_AIGC_APP_SECRET?.trim() || ''
   return {
     channelCode: process.env.MIGU_CHANNEL_CODE?.trim() || '',

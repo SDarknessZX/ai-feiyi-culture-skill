@@ -8,12 +8,10 @@ import {
   Crop,
   EllipsisVertical,
   Film,
-  Gift,
   Grid2X2,
   ImageUp,
   Images,
   Info,
-  Library,
   LogIn,
   Loader2,
   MessageCircle,
@@ -23,9 +21,7 @@ import {
   ShieldCheck,
   Shirt,
   Sparkles,
-  SquareArrowOutUpRight,
   Trash2,
-  Utensils,
   Volume2,
   VolumeX,
   Wand2,
@@ -76,6 +72,15 @@ type PendingCreation = {
   gender: GenderId
   templateTitle: string
   imageUrl: string
+}
+
+type CreationOverrides = {
+  file?: File
+  preview?: string
+  gender?: GenderId
+  templateId?: string
+  templateTitle?: string
+  skipAgreement?: boolean
 }
 
 type TokenRemainInfo = {
@@ -137,12 +142,24 @@ type ChatMessage = {
   id: string
   role: 'user' | 'assistant'
   text: string
+  imageUrl?: string
   loading?: boolean
 }
 
-type ChatResponse = {
-  reply?: string
-  source?: 'llm' | 'fallback'
+type ChatResultHistoryItem = {
+  id: string
+  mode: ModeId
+  result: CreateResult
+  context?: CreationContext
+}
+
+type CreationContext = {
+  id: string
+  file: File
+  preview: string
+  gender?: GenderId
+  templateId?: string
+  templateTitle: string
 }
 
 type PosterResponse = {
@@ -160,22 +177,26 @@ type MiguEnv = {
   isInMiniprogram: boolean
 }
 
+type PendingLoginAction =
+  | { kind: 'upload'; returnToPanel: boolean }
+  | { kind: 'template'; mode: ModeId; templateId: string }
+
 const worksStorageKey = 'ai-yitu-zhenying-works'
 const pendingStorageKey = 'ai-yitu-zhenying-pending'
 const usageAcceptedStorageKey = 'ai-yitu-zhenying-usage-accepted-202605'
 const mediaPermissionStorageKey = 'ai-yitu-zhenying-media-permission'
 const cameraPermissionStorageKey = 'ai-yitu-zhenying-camera-permission'
 const galleryPermissionStorageKey = 'ai-yitu-zhenying-gallery-permission'
-// TEMP: 对方登录接口联调完成前，临时旁路咪咕登录与 Token 计费入口，方便功能验收。
-// 恢复方式：将此处改为 false；登录弹窗、回调和后端接口均保留未删除。
-const temporarilyBypassMiguLogin = true
+// 默认启用真实登录；仅在明确设置 VITE_BYPASS_MIGU_LOGIN=true 时进入免登录测试模式。
+const temporarilyBypassMiguLogin = import.meta.env.VITE_BYPASS_MIGU_LOGIN === 'true'
 const miguSessionStorageKey = 'ai-yitu-zhenying-migu-session'
 const miguLoginPendingKey = 'ai-yitu-zhenying-migu-login-pending'
+const miguPendingLoginActionKey = 'ai-yitu-zhenying-migu-pending-login-action'
 // btoken 官方有效期 1 小时，这里留一点余量提前判过期，避免临界点上用过期 token 发请求
 const miguSessionTtlMs = 55 * 60 * 1000
 const pendingCreationStorageKey = 'ai-yitu-zhenying-migu-pending-creation'
 const miguTaskIdPendingKey = 'ai-yitu-zhenying-migu-taskid-pending'
-const serviceProviderName = import.meta.env.VITE_SERVICE_PROVIDER_NAME?.trim() || '咪咕音乐有限公司'
+const serviceProviderName = import.meta.env.VITE_SERVICE_PROVIDER_NAME?.trim() || '深圳市普威德科技有限公司'
 const privacyPolicyUrl =
   import.meta.env.VITE_PRIVACY_POLICY_URL?.trim() ||
   'https://passport.migu.cn/portal/privacy/protocol?sourceid=220024'
@@ -213,6 +234,23 @@ const modeLabels: Record<ModeId, string> = {
   costume: '民族变装',
   food: '美食萌化',
   painting: '画作活化',
+}
+
+const creationPromptByTemplateId: Record<string, string> = {
+  'ethnic-miao': '结合图片，生成一段苗族银饰风服饰变装视频',
+  'ethnic-yi': '结合图片，生成一段彝族火纹风服饰变装视频',
+  'ethnic-dong': '结合图片，生成一段侗族鼓楼风服饰变装视频',
+  'ethnic-zang': '结合图片，生成一段藏族雪域风服饰变装视频',
+  'ethnic-uyghur': '结合图片，生成一段维吾尔族花帽风服饰变装视频',
+  'ethnic-mongol': '结合图片，生成一段蒙古族草原风服饰变装视频',
+  'dynasty-song': '结合图片，生成一段宋代雅韵服饰变装视频',
+  'dynasty-dunhuang': '结合图片，生成一段敦煌飞天造型变装视频',
+  臊子面: '结合图片，生成一段10秒Q版非遗美食微缩景观趣味讲解视频',
+  糖醋排骨: '结合图片，生成一段10秒Q版非遗美食微缩景观趣味讲解视频',
+  月饼: '结合图片，生成一段10秒Q版非遗美食微缩景观趣味讲解视频',
+  'new-year-figure': '结合图片，生成一段喜庆年画人物活化视频',
+  'paper-shadow': '结合图片，生成一段剪纸皮影光影动画视频',
+  'mural-revive': '结合图片，生成一段千年壁画复苏动画视频',
 }
 
 const sampleImagesByMode: Record<ModeId, SampleImage[]> = {
@@ -279,75 +317,111 @@ type InspirationBubble = {
   id: string
   label: string
   mode: ModeId | null
+  chatTopicIndex?: number
   templateId?: string
+  sampleImageId?: string
+  sampleGender?: GenderId
   icon: typeof MessageCircle
 }
 
 const inspirationBubbles: InspirationBubble[] = [
-  { id: 'chat-flow', label: '进入你的对话流', mode: null, icon: MessageCircle },
+  { id: 'chat-morning', label: '早上好，新的一天加油呀', mode: null, chatTopicIndex: 0, icon: MessageCircle },
+  { id: 'chat-joke', label: '讲个冷笑话', mode: null, chatTopicIndex: 1, icon: MessageCircle },
+  { id: 'chat-lucky-number', label: '我今天的幸运数是什么', mode: null, chatTopicIndex: 2, icon: MessageCircle },
   {
     id: 'costume-miao',
     label: '邂逅银饰璀璨的苗族风情',
     mode: 'costume',
     templateId: 'ethnic-miao',
-    icon: Sparkles,
+    sampleImageId: 'costume-sample-1',
+    sampleGender: 'female',
+    icon: Shirt,
   },
   {
     id: 'costume-yi',
     label: '体验热情似火的彝族风情',
     mode: 'costume',
     templateId: 'ethnic-yi',
-    icon: Sparkles,
+    sampleImageId: 'costume-sample-2',
+    sampleGender: 'male',
+    icon: Shirt,
   },
   {
     id: 'costume-dong',
     label: '聆听侗族鼓楼下的悠扬歌声',
     mode: 'costume',
     templateId: 'ethnic-dong',
-    icon: Wand2,
+    sampleImageId: 'costume-sample-3',
+    sampleGender: 'female',
+    icon: Shirt,
   },
   {
     id: 'costume-zang',
     label: '感受雪域圣洁的藏族风情',
     mode: 'costume',
     templateId: 'ethnic-zang',
-    icon: Sparkles,
+    sampleImageId: 'costume-sample-1',
+    sampleGender: 'female',
+    icon: Shirt,
   },
   {
     id: 'costume-uyghur',
     label: '戴上花帽共舞维吾尔风情',
     mode: 'costume',
     templateId: 'ethnic-uyghur',
-    icon: Wand2,
+    sampleImageId: 'costume-sample-2',
+    sampleGender: 'male',
+    icon: Shirt,
   },
   {
     id: 'costume-mongol',
     label: '奔赴辽阔豪迈的蒙古草原',
     mode: 'costume',
     templateId: 'ethnic-mongol',
-    icon: Sparkles,
+    sampleImageId: 'costume-sample-3',
+    sampleGender: 'female',
+    icon: Shirt,
   },
   {
     id: 'costume-song',
     label: '一秒穿越宋代雅韵',
     mode: 'costume',
     templateId: 'dynasty-song',
-    icon: Wand2,
+    sampleImageId: 'costume-sample-1',
+    sampleGender: 'female',
+    icon: Shirt,
   },
   {
     id: 'costume-dunhuang',
     label: '化身敦煌飞天翩然起舞',
     mode: 'costume',
     templateId: 'dynasty-dunhuang',
-    icon: Wand2,
+    sampleImageId: 'costume-sample-3',
+    sampleGender: 'female',
+    icon: Shirt,
   },
-  { id: 'food-noodle', label: '让长安臊子面萌动起来', mode: 'food', templateId: '臊子面', icon: Utensils },
-  { id: 'food-mooncake', label: '开启月宫月饼奇遇', mode: 'food', templateId: '月饼', icon: Utensils },
+  {
+    id: 'food-noodle',
+    label: '让长安臊子面萌动起来',
+    mode: 'food',
+    templateId: '臊子面',
+    sampleImageId: 'food-sample-1',
+    icon: ChefHat,
+  },
+  {
+    id: 'food-mooncake',
+    label: '开启月宫月饼奇遇',
+    mode: 'food',
+    templateId: '月饼',
+    sampleImageId: 'food-sample-2',
+    icon: ChefHat,
+  },
   {
     id: 'painting-new-year',
     label: '唤醒喜庆吉祥的年画人物',
     mode: 'painting',
     templateId: 'new-year-figure',
+    sampleImageId: 'painting-sample-1',
     icon: Palette,
   },
   {
@@ -355,6 +429,7 @@ const inspirationBubbles: InspirationBubble[] = [
     label: '让千年壁画翩然苏醒',
     mode: 'painting',
     templateId: 'mural-revive',
+    sampleImageId: 'painting-sample-3',
     icon: Palette,
   },
 ]
@@ -362,12 +437,15 @@ const inspirationBubbles: InspirationBubble[] = [
 const chatTopics = [
   {
     prompt: '早上好，新的一天加油呀',
+    reply: '早上好！愿你今天灵感满满、事事顺利。',
   },
   {
     prompt: '讲个冷笑话',
+    reply: '什么门永远关不上？答案是球门。',
   },
   {
     prompt: '我今天的幸运数是什么',
+    reply: '你今天的幸运数是 8，愿好事成双、好运发生。',
   },
 ]
 
@@ -425,6 +503,24 @@ function hasValidMiguSession(): boolean {
   return Boolean(session && Date.now() - session.obtainedAt < miguSessionTtlMs)
 }
 
+function savePendingLoginAction(action: PendingLoginAction) {
+  window.sessionStorage.setItem(miguPendingLoginActionKey, JSON.stringify(action))
+}
+
+function takePendingLoginAction(): PendingLoginAction | null {
+  const raw = window.sessionStorage.getItem(miguPendingLoginActionKey)
+  if (!raw) return null
+  window.sessionStorage.removeItem(miguPendingLoginActionKey)
+  try {
+    const action = JSON.parse(raw) as PendingLoginAction
+    if (action.kind === 'upload') return action
+    if (action.kind === 'template' && action.mode && action.templateId) return action
+  } catch {
+    // 登录前保存的动作损坏时直接丢弃，避免回调后误触发创作。
+  }
+  return null
+}
+
 function createEmptyDraft(): ModeDraft {
   return {
     file: null,
@@ -438,6 +534,7 @@ function createEmptyDraft(): ModeDraft {
 function App() {
   const [miguEnv, setMiguEnv] = useState<MiguEnv>({ isInMiguAPP: false, isInMiniprogram: false })
   const [view, setView] = useState<AppView>('home')
+  const [libraryReturnView, setLibraryReturnView] = useState<Exclude<AppView, 'library'>>('home')
   const [works, setWorks] = useState<WorkItem[]>(loadWorks)
   const [mode, setMode] = useState<ModeId>('costume')
   const [chatMode, setChatMode] = useState<ModeId>('costume')
@@ -455,6 +552,7 @@ function App() {
   const [tokenGatingEnabled, setTokenGatingEnabled] = useState(false)
   const [tokenRemain, setTokenRemain] = useState<TokenRemainInfo | null>(null)
   const [showInfo, setShowInfo] = useState(false)
+  const [showBalanceDetail, setShowBalanceDetail] = useState(false)
   const [showLoginDialog, setShowLoginDialog] = useState(false)
   const [showUsageNotice, setShowUsageNotice] = useState(false)
   const [showMediaSourceSheet, setShowMediaSourceSheet] = useState(false)
@@ -480,7 +578,7 @@ function App() {
   const [cropRatio, setCropRatio] = useState<CropRatio>('9:16')
   const [toast, setToast] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
-  const [chatBusy, setChatBusy] = useState(false)
+  const [chatResultHistory, setChatResultHistory] = useState<ChatResultHistoryItem[]>([])
   const [drafts, setDrafts] = useState<Record<ModeId, ModeDraft>>(() => ({
     costume: createEmptyDraft(),
     food: createEmptyDraft(),
@@ -496,10 +594,17 @@ function App() {
   const resumeRef = useRef(false)
   const returnToCreationPanelRef = useRef(false)
   const publishRedirectingRef = useRef(false)
+  const activeCreationContextRef = useRef<Partial<Record<ModeId, CreationContext>>>({})
   // 咱们的 jobId -> 咪咕 taskId，创作完成事件上报要用，跨 pollTask 的多轮请求持续存在
   const miguTaskIdByJobRef = useRef<Record<string, string>>({})
 
   const activeMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode])
+  const usesIOSPermissionDialog = useMemo(
+    () =>
+      /iphone|ipad|ipod|mobilemusic/i.test(window.navigator.userAgent) ||
+      (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1),
+    [],
+  )
   const visibleTemplates = useMemo(() => getVisibleTemplates(mode, templates), [mode, templates])
   const selectedTemplate = useMemo(() => {
     const selectedId = mode === 'costume' ? costumeStyle : mode === 'food' ? foodShowcase : paintingStyle
@@ -509,6 +614,7 @@ function App() {
   const hasRunningTask = Object.values(drafts).some((draft) => draft.busy || draft.polling)
   const chatResult = drafts[chatMode].result
   const chatVideoUrl = chatResult?.videoUrl || chatResult?.previewUrl
+  const visibleBalance = tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? (temporarilyBypassMiguLogin ? 430 : '--')
 
   useEffect(() => {
     const ua = window.navigator.userAgent.toLowerCase()
@@ -536,7 +642,7 @@ function App() {
     }))
   }
 
-  async function chooseSampleImage(targetMode: ModeId, sample: SampleImage) {
+  async function chooseSampleImage(targetMode: ModeId, sample: SampleImage): Promise<File | null> {
     try {
       const response = await fetch(sample.imageUrl, { cache: 'force-cache' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -544,15 +650,14 @@ function App() {
       const fileType = blob.type || 'image/webp'
       const extension = fileType.includes('png') ? 'png' : fileType.includes('jpeg') ? 'jpg' : 'webp'
       const sampleFile = new File([blob], `${sample.id}.${extension}`, { type: fileType })
-      const currentPreview = drafts[targetMode].preview
-      if (currentPreview.startsWith('blob:')) URL.revokeObjectURL(currentPreview)
       updateDraft(targetMode, {
         file: sampleFile,
         preview: sample.imageUrl,
-        result: null,
       })
+      return sampleFile
     } catch {
       setToast('样例图片加载失败，请重试')
+      return null
     }
   }
 
@@ -644,6 +749,7 @@ function App() {
         trackQingyuanUserLogin('success', { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram })
       }
     } else if (loginWasPending) {
+      window.sessionStorage.removeItem(miguPendingLoginActionKey)
       setToast('登录失败，请重试')
       trackAmberLogin('fail')
       trackQingyuanUserLogin('fail', { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram })
@@ -660,6 +766,30 @@ function App() {
     window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 登录页整页回跳后，自动续接用户登录前发起的上传或“做同款”动作。
+  useEffect(() => {
+    if (!isLoggedIn) return
+    const action = takePendingLoginAction()
+    if (!action) return
+
+    if (action.kind === 'upload') {
+      returnToCreationPanelRef.current = action.returnToPanel
+      setUploadFlowPending(true)
+      if (!acceptedAgreement) setShowUsageNotice(true)
+      else setShowMediaSourceSheet(true)
+      return
+    }
+
+    const template = getVisibleTemplates(action.mode, templates).find((item) => item.id === action.templateId)
+    if (!template) {
+      setToast('原模板已更新，请重新选择后创作')
+      return
+    }
+    void createFromTemplate(template, action.mode)
+    // 仅在登录态由 false 变为 true 时消费一次待续接动作。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn])
 
   // 从"获取 taskId 页面"跳转回来：URL 带 taskId（或失败态），配合 sessionStorage 里存的待提交创作请求续上流程
   useEffect(() => {
@@ -887,10 +1017,83 @@ function App() {
     setView('home')
   }
 
+  function openLibrary() {
+    if (view !== 'library') setLibraryReturnView(view)
+    setView('library')
+  }
+
+  function leaveLibrary() {
+    setView(libraryReturnView)
+  }
+
   function chooseTemplate(templateId: string) {
     if (mode === 'costume') setCostumeStyle(templateId)
     if (mode === 'food') setFoodShowcase(templateId)
     if (mode === 'painting') setPaintingStyle(templateId)
+  }
+
+  function selectTemplateForMode(targetMode: ModeId, templateId: string) {
+    if (targetMode === 'costume') setCostumeStyle(templateId)
+    if (targetMode === 'food') setFoodShowcase(templateId)
+    if (targetMode === 'painting') setPaintingStyle(templateId)
+  }
+
+  function getTemplatePreset(targetMode: ModeId, templateId: string) {
+    const configured = inspirationBubbles.find((item) => item.mode === targetMode && item.templateId === templateId)
+    const targetTemplates = getVisibleTemplates(targetMode, templates)
+    const templateIndex = Math.max(0, targetTemplates.findIndex((item) => item.id === templateId))
+    const samples = sampleImagesByMode[targetMode]
+    return {
+      sample: samples.find((item) => item.id === configured?.sampleImageId) || samples[templateIndex % samples.length] || samples[0],
+      gender: configured?.sampleGender || (targetMode === 'costume' ? ('female' as const) : undefined),
+    }
+  }
+
+  async function createFromTemplate(template: TemplateItem, targetMode: ModeId = mode) {
+    // 登录、权益、并发校验严格按产品顺序执行。
+    if (!temporarilyBypassMiguLogin && !isLoggedIn) {
+      savePendingLoginAction({ kind: 'template', mode: targetMode, templateId: template.id })
+      setShowLoginDialog(true)
+      return
+    }
+    if (hasRunningTask) {
+      setToast('已有1项任务制作中，稍后再创作哦～可到我的作品页查看进度')
+      return
+    }
+
+    selectTemplateForMode(targetMode, template.id)
+    setMode(targetMode)
+    setChatMode(targetMode)
+    const preset = getTemplatePreset(targetMode, template.id)
+    const sampleFile = await chooseSampleImage(targetMode, preset.sample)
+    if (!sampleFile) return
+    if (preset.gender) setGender(preset.gender)
+    await createVideo(targetMode, {
+      file: sampleFile,
+      preview: preset.sample.imageUrl,
+      gender: preset.gender,
+      templateId: template.id,
+      templateTitle: template.title,
+      skipAgreement: true,
+    })
+  }
+
+  function choosePanelTemplate(templateId: string) {
+    chooseTemplate(templateId)
+    const preset = getTemplatePreset(mode, templateId)
+    const currentPreviewIsSample = sampleImagesByMode[mode].some((item) => item.imageUrl === drafts[mode].preview)
+    if (!drafts[mode].file || currentPreviewIsSample) void chooseSampleImage(mode, preset.sample)
+  }
+
+  function choosePanelMode(nextMode: ModeId) {
+    setMode(nextMode)
+    const targetTemplates = getVisibleTemplates(nextMode, templates)
+    const selectedId = nextMode === 'costume' ? costumeStyle : nextMode === 'food' ? foodShowcase : paintingStyle
+    const targetTemplate = targetTemplates.find((item) => item.id === selectedId) || targetTemplates[0]
+    if (!targetTemplate) return
+    const preset = getTemplatePreset(nextMode, targetTemplate.id)
+    const currentPreviewIsSample = sampleImagesByMode[nextMode].some((item) => item.imageUrl === drafts[nextMode].preview)
+    if (!drafts[nextMode].file || currentPreviewIsSample) void chooseSampleImage(nextMode, preset.sample)
   }
 
   function closeUploadOverlays() {
@@ -921,8 +1124,8 @@ function App() {
     setPreviewImageUrl('')
     closeUploadOverlays()
 
-    // TEMP: 登录接口联调完成后，关闭 temporarilyBypassMiguLogin 即恢复此登录拦截。
     if (!temporarilyBypassMiguLogin && !isLoggedIn) {
+      savePendingLoginAction({ kind: 'upload', returnToPanel: returnToCreationPanelRef.current })
       setShowLoginDialog(true)
       return
     }
@@ -971,6 +1174,7 @@ function App() {
 
   function closeLoginDialog() {
     trackAmberLogin('cancel')
+    window.sessionStorage.removeItem(miguPendingLoginActionKey)
     setShowLoginDialog(false)
     restorePreviousPanel()
   }
@@ -988,14 +1192,7 @@ function App() {
   function chooseMediaSource(source: UploadSource) {
     setUploadSource(source)
     setShowMediaSourceSheet(false)
-    const jointPermission = !miguEnv.isInMiguAPP || miguEnv.isInMiniprogram
-    const sourceGranted = source === 'camera' ? cameraPermissionGranted : galleryPermissionGranted
-    const permissionGranted = jointPermission ? cameraPermissionGranted && galleryPermissionGranted : sourceGranted
-    if (!permissionGranted) {
-      window.setTimeout(() => setShowPermissionDialog(true), 120)
-      return
-    }
-    window.setTimeout(() => fileRef.current?.click(), 120)
+    window.setTimeout(() => setShowPermissionDialog(true), 120)
   }
 
   function closeMediaSourceSheet() {
@@ -1003,7 +1200,18 @@ function App() {
     restorePreviousPanel()
   }
 
-  function confirmMediaPermission() {
+  async function confirmMediaPermission() {
+    if (uploadSource === 'camera' && navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+        stream.getTracks().forEach((track) => track.stop())
+      } catch (error) {
+        const denied = error instanceof DOMException && ['NotAllowedError', 'PermissionDeniedError'].includes(error.name)
+        setToast(denied ? '相机权限未开启，请在系统设置中允许后重试' : '无法调用相机，请改用相册上传')
+        return
+      }
+    }
+
     const jointPermission = !miguEnv.isInMiguAPP || miguEnv.isInMiniprogram
     if (jointPermission) {
       setCameraPermissionGranted(true)
@@ -1064,10 +1272,8 @@ function App() {
       return
     }
 
-    if (preview.startsWith('blob:')) URL.revokeObjectURL(preview)
     updateDraft(mode, {
       file: nextFile,
-      result: null,
       preview: URL.createObjectURL(nextFile),
     })
     setUploadFlowPending(false)
@@ -1122,18 +1328,28 @@ function App() {
   }
 
   function removeUploadedImage() {
-    if (preview.startsWith('blob:')) URL.revokeObjectURL(preview)
     updateDraft(mode, {
       file: null,
       preview: '',
-      result: null,
     })
     setPreviewImageUrl('')
   }
 
-  function handleBubbleClick(item: InspirationBubble) {
+  async function handleBubbleClick(item: InspirationBubble) {
     if (!item.mode) {
-      startNonCreativeChat()
+      const topic = typeof item.chatTopicIndex === 'number' ? chatTopics[item.chatTopicIndex] : undefined
+      startNonCreativeChat(topic)
+      return
+    }
+
+    if (!temporarilyBypassMiguLogin && !isLoggedIn) {
+      const templateId = item.templateId || getVisibleTemplates(item.mode, templates)[0]?.id
+      if (templateId) savePendingLoginAction({ kind: 'template', mode: item.mode, templateId })
+      setShowLoginDialog(true)
+      return
+    }
+    if (hasRunningTask) {
+      setToast('已有1项任务制作中，稍后再创作哦～可到我的作品页查看进度')
       return
     }
 
@@ -1143,17 +1359,45 @@ function App() {
     if (item.mode === 'food' && item.templateId) setFoodShowcase(item.templateId)
     if (item.mode === 'painting' && item.templateId) setPaintingStyle(item.templateId)
 
-    setMode(item.mode)
-    setView('home')
+    const targetMode = item.mode
+    setMode(targetMode)
+    setChatMode(targetMode)
+    setView('chat')
+
+    const sample =
+      sampleImagesByMode[targetMode].find((sampleItem) => sampleItem.id === item.sampleImageId) || sampleImagesByMode[targetMode][0]
+    const sampleFile = await chooseSampleImage(targetMode, sample)
+    if (!sampleFile) return
+
+    if (item.sampleGender) setGender(item.sampleGender)
+    const bubbleTemplate = getVisibleTemplates(targetMode, templates).find((template) => template.id === item.templateId)
+    void createVideo(targetMode, {
+      file: sampleFile,
+      preview: sample.imageUrl,
+      gender: item.sampleGender,
+      templateId: item.templateId,
+      templateTitle: bubbleTemplate?.title,
+      skipAgreement: true,
+    })
   }
 
   function startNonCreativeChat(topic?: (typeof chatTopics)[number]) {
     setShowQuickComposer(true)
     if (topic) {
-      void sendChatMessage(topic.prompt)
+      const stamp = Date.now()
+      trackAmberInteract(readMiguSession()?.vuid)
+      reportChatInteraction(topic.prompt)
+      setChatMessages((current) => [
+        ...current.filter((item) => !item.loading),
+        { id: `user-topic-${stamp}`, role: 'user', text: topic.prompt },
+        { id: `assistant-topic-${stamp}`, role: 'assistant', text: topic.reply },
+      ])
+      setView('chat')
       return
     }
-    setChatMessages([{ id: `assistant-${Date.now()}`, role: 'assistant', text: '想聊点什么？我在这里。' }])
+    setChatMessages((current) =>
+      current.length ? current : [{ id: `assistant-${Date.now()}`, role: 'assistant', text: '想聊点什么？我在这里。' }],
+    )
     setView('chat')
   }
 
@@ -1170,47 +1414,20 @@ function App() {
     }).catch(() => {})
   }
 
-  async function sendChatMessage(message: string) {
-    const trimmed = message.trim()
-    if (!trimmed || chatBusy) return
-    trackAmberInteract(readMiguSession()?.vuid)
-    reportChatInteraction(trimmed)
-    const stamp = Date.now()
-    const loadingId = `assistant-${stamp}`
-    setChatBusy(true)
-    setChatMessages((current) => [
-      ...current.filter((item) => !item.loading),
-      { id: `user-${stamp}`, role: 'user', text: trimmed },
-      { id: loadingId, role: 'assistant', text: '正在连接语言模型...', loading: true },
-    ])
-    setView('chat')
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ message: trimmed }),
-      })
-      const data = (await response.json()) as ChatResponse
-      const reply = data.reply || getLocalChatFallback(trimmed)
-      setChatMessages((current) => current.map((item) => (item.id === loadingId ? { ...item, text: reply, loading: false } : item)))
-    } catch {
-      setChatMessages((current) =>
-        current.map((item) => (item.id === loadingId ? { ...item, text: getLocalChatFallback(trimmed), loading: false } : item)),
-      )
-    } finally {
-      setChatBusy(false)
-    }
-  }
-
   function shuffleTemplates() {
     const list = visibleTemplates
-    if (list.length <= 1) return
+    if (!list.length) return
     const selectedIndex = list.findIndex((item) => item.id === selectedTemplate?.id)
-    const next = list[(selectedIndex + 3 + list.length) % list.length] || list[0]
-    chooseTemplate(next.id)
+    if (selectedIndex >= 0 && selectedIndex < list.length - 1) {
+      chooseTemplate(list[selectedIndex + 1].id)
+      return
+    }
+    const modeIndex = modes.findIndex((item) => item.id === mode)
+    const nextMode = modes[(modeIndex + 1) % modes.length].id
+    const nextTemplates = getVisibleTemplates(nextMode, templates)
+    if (!nextTemplates.length) return
+    setMode(nextMode)
+    selectTemplateForMode(nextMode, nextTemplates[0].id)
   }
 
   function openTemplateDetail(template: TemplateItem) {
@@ -1219,21 +1436,33 @@ function App() {
   }
 
   function useSameTemplate() {
-    setView('home')
-    window.setTimeout(() => {
-      if (!drafts[mode].file) {
-        setToast('请上传你的创意图片或选择参考图')
-        requestUpload()
-        return
-      }
-      void createVideo()
-    }, 0)
+    if (selectedTemplate) void createFromTemplate(selectedTemplate)
+  }
+
+  function openRegeneratePanel(targetMode: ModeId, context?: CreationContext) {
+    if (context) {
+      if (targetMode === 'costume' && context.templateId) setCostumeStyle(context.templateId)
+      if (targetMode === 'food' && context.templateId) setFoodShowcase(context.templateId)
+      if (targetMode === 'painting' && context.templateId) setPaintingStyle(context.templateId)
+      if (context.gender) setGender(context.gender)
+      updateDraft(targetMode, { file: context.file, preview: context.preview })
+    }
+    setMode(targetMode)
+    setChatMode(targetMode)
+    setView('chat')
+    setShowCreationPanel(true)
   }
 
   function templateIdFor(targetMode: ModeId) {
     if (targetMode === 'costume') return costumeStyle
     if (targetMode === 'painting') return paintingStyle
-    return ''
+    return foodShowcase
+  }
+
+  function templateTitleFor(targetMode: ModeId) {
+    const targetTemplates = getVisibleTemplates(targetMode, templates)
+    const selectedId = targetMode === 'costume' ? costumeStyle : targetMode === 'food' ? foodShowcase : paintingStyle
+    return targetTemplates.find((item) => item.id === selectedId)?.title || modeLabels[targetMode]
   }
 
   // 处理 /api/create 或 /api/create/start 的响应：两条路径完成后的收尾逻辑完全一样
@@ -1253,9 +1482,6 @@ function App() {
     saveWork(data)
     setChatMode(targetMode)
     setView('chat')
-    setChatMessages([
-      { id: `user-${Date.now()}`, role: 'user', text: `使用「${data.templateTitle || modeLabels[targetMode]}」发起创作` },
-    ])
 
     if (response.ok && data.taskId && ['queued', 'running'].includes(data.status)) {
       savePendingTask(targetMode, data)
@@ -1265,13 +1491,13 @@ function App() {
   }
 
   // Token 网关没开时的原始路径：一次请求直接建任务，不经过咪咕 taskId 页面
-  async function submitLegacyCreate(targetMode: ModeId, file: File) {
+  async function submitLegacyCreate(targetMode: ModeId, file: File, overrides: CreationOverrides = {}) {
     const formData = new FormData()
     formData.append('image', file)
     formData.append('mode', targetMode)
-    const template = templateIdFor(targetMode)
+    const template = overrides.templateId ?? templateIdFor(targetMode)
     if (template) formData.append('template', template)
-    formData.append('gender', gender || 'female')
+    formData.append('gender', overrides.gender || gender || 'female')
 
     try {
       const response = await fetch('/api/create', { method: 'POST', body: formData })
@@ -1290,13 +1516,13 @@ function App() {
   }
 
   // Token 网关开着时：先上传+机审拿 imageUrl，存好待提交状态，再整页跳转去咪咕拿 taskId
-  async function beginTokenGatedCreation(targetMode: ModeId, file: File, btoken: string) {
-    const template = templateIdFor(targetMode)
+  async function beginTokenGatedCreation(targetMode: ModeId, file: File, btoken: string, overrides: CreationOverrides = {}) {
+    const template = overrides.templateId ?? templateIdFor(targetMode)
     const formData = new FormData()
     formData.append('image', file)
     formData.append('mode', targetMode)
     if (template) formData.append('template', template)
-    formData.append('gender', gender || 'female')
+    formData.append('gender', overrides.gender || gender || 'female')
 
     try {
       const prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
@@ -1316,8 +1542,8 @@ function App() {
       const pending: PendingCreation = {
         mode: targetMode,
         template,
-        gender: gender || 'female',
-        templateTitle: prepared.templateTitle || modeLabels[targetMode],
+        gender: overrides.gender || gender || 'female',
+        templateTitle: overrides.templateTitle || prepared.templateTitle || modeLabels[targetMode],
         imageUrl: prepared.imageUrl,
       }
       window.sessionStorage.setItem(pendingCreationStorageKey, JSON.stringify(pending))
@@ -1397,45 +1623,88 @@ function App() {
     }
   }
 
-  async function createVideo(targetMode: ModeId = mode) {
+  async function createVideo(targetMode: ModeId = mode, overrides: CreationOverrides = {}) {
     const targetDraft = drafts[targetMode]
     const targetIsWaiting = targetDraft.busy || targetDraft.polling
 
-    if (hasRunningTask && !targetIsWaiting) {
-      setToast('当前仅支持创作1个任务，请等待当前任务完成')
+    if (!temporarilyBypassMiguLogin && !isLoggedIn) {
+      const templateId = overrides.templateId ?? templateIdFor(targetMode)
+      if (templateId) savePendingLoginAction({ kind: 'template', mode: targetMode, templateId })
+      setShowLoginDialog(true)
       return
     }
 
-    if (!targetDraft.file) {
+    if (targetIsWaiting || hasRunningTask) {
+      setToast('已有1项任务制作中，稍后再创作哦～可到我的作品页查看进度')
+      return
+    }
+
+    const nextFile = overrides.file || targetDraft.file
+    if (!nextFile) {
       if (targetMode !== mode) setMode(targetMode)
       setToast('请上传你的创意图片或选择参考图')
       requestUpload()
       return
     }
 
-    if (targetMode === 'costume' && !gender) {
+    const creationGender = overrides.gender || gender
+    if (targetMode === 'costume' && !creationGender) {
       setToast('请选择性别')
       setShowCreationPanel(true)
       return
     }
 
-    if (!acceptedAgreement) {
+    if (!acceptedAgreement && !overrides.skipAgreement) {
+      returnToCreationPanelRef.current = showCreationPanel
+      setShowCreationPanel(false)
       setShowUsageNotice(true)
       return
     }
 
-    const file = targetDraft.file
+    const file = nextFile
     const session = readMiguSession()
-    updateDraft(targetMode, { busy: true, result: null })
+    const previousResult = targetDraft.result
+    const previousContext = activeCreationContextRef.current[targetMode]
+    if (previousResult) {
+      setChatResultHistory((current) => {
+        const historyId = previousResult.taskId || previousContext?.id || `${targetMode}-${previousResult.status}-${previousResult.message}`
+        if (current.some((item) => item.id === historyId)) return current
+        return [...current, { id: historyId, mode: targetMode, result: previousResult, context: previousContext }]
+      })
+    }
+
+    const stamp = Date.now()
+    const templateTitle = overrides.templateTitle || templateTitleFor(targetMode)
+    const creationTemplateId = overrides.templateId ?? templateIdFor(targetMode)
+    const messagePreview = overrides.preview || targetDraft.preview
+    setShowCreationPanel(false)
+    activeCreationContextRef.current[targetMode] = {
+      id: `creation-${stamp}`,
+      file,
+      preview: messagePreview,
+      gender: creationGender || undefined,
+      templateId: creationTemplateId,
+      templateTitle,
+    }
+    setChatMessages((current) => [
+      ...current.filter((item) => !item.loading),
+      { id: `user-create-${stamp}`, role: 'user', text: getCreationPrompt(targetMode, creationTemplateId) },
+    ])
+    setChatMode(targetMode)
+    setView('chat')
+    updateDraft(targetMode, {
+      busy: true,
+      result: { status: 'queued', mode: targetMode, message: '创作请求已提交', templateTitle },
+    })
 
     if (tokenGatingEnabled && session?.btoken) {
-      await beginTokenGatedCreation(targetMode, file, session.btoken)
+      await beginTokenGatedCreation(targetMode, file, session.btoken, { ...overrides, gender: creationGender || undefined })
       // 成功时上面那步已经整页跳转离开了，走不到这里；只有失败/降级路径需要收尾复位
       updateDraft(targetMode, { busy: false })
       return
     }
 
-    await submitLegacyCreate(targetMode, file)
+    await submitLegacyCreate(targetMode, file, { ...overrides, gender: creationGender || undefined })
   }
 
   async function pollTask(initial: CreateResult, targetMode: ModeId) {
@@ -1530,22 +1799,6 @@ function App() {
     }
   }
 
-  async function shareCurrentPage() {
-    try {
-      if (window.navigator.share) {
-        await window.navigator.share({
-          title: 'AI非遗文化skill',
-          url: window.location.href,
-        })
-        return
-      }
-      await window.navigator.clipboard.writeText(window.location.href)
-      setToast('链接已复制')
-    } catch (error) {
-      if ((error as DOMException).name !== 'AbortError') setToast('暂时无法分享')
-    }
-  }
-
   async function publishVideo(videoUrl?: string, videoCover?: string, resourceId?: string, templateId?: string) {
     if (publishRedirectingRef.current) return
     if (!videoUrl) {
@@ -1593,7 +1846,12 @@ function App() {
       className={`app-shell view-${view}${miguEnv.isInMiguAPP ? ' in-migu' : ''}${miguEnv.isInMiniprogram ? ' in-miniprogram' : ''}`}
     >
       <header className="app-topbar">
-        <button className="icon-button" type="button" onClick={() => (view === 'home' ? undefined : returnHome())} aria-label="返回首页">
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => (view === 'home' ? undefined : view === 'library' ? leaveLibrary() : returnHome())}
+          aria-label={view === 'library' ? '返回上一页' : '返回首页'}
+        >
           <ArrowLeft size={20} />
         </button>
         <button className="title-button" type="button" onClick={() => setShowInfo(true)}>
@@ -1601,20 +1859,13 @@ function App() {
           <Info size={14} />
         </button>
         <div className="topbar-actions">
-          {!temporarilyBypassMiguLogin && (
-            <button className="credit-badge" type="button" onClick={() => void openUsageDetail()} aria-label="查看分贝明细">
-              <Sparkles size={13} />
-              {tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? '--'}
-            </button>
-          )}
-          <button className="works-pill" type="button" onClick={() => setView(view === 'library' ? 'home' : 'library')}>
+          <button className="credit-badge" type="button" onClick={() => setShowBalanceDetail(true)} aria-label="查看分贝明细">
+            <Sparkles size={13} />
+            {visibleBalance}
+          </button>
+          <button className="works-pill" type="button" onClick={() => (view === 'library' ? leaveLibrary() : openLibrary())}>
             我的作品
           </button>
-          {view === 'chat' && (
-            <button className="share-button" type="button" onClick={() => void shareCurrentPage()} aria-label="分享当前页面">
-              <SquareArrowOutUpRight size={18} />
-            </button>
-          )}
         </div>
       </header>
 
@@ -1626,7 +1877,8 @@ function App() {
           onBubbleClick={handleBubbleClick}
           onChooseTemplate={chooseTemplate}
           onOpenTemplate={openTemplateDetail}
-          onOpenLibrary={() => setView('library')}
+          onUseTemplate={(template) => void createFromTemplate(template)}
+          onOpenChat={() => startNonCreativeChat()}
           onShuffle={shuffleTemplates}
         />
       )}
@@ -1637,13 +1889,15 @@ function App() {
 
       {view === 'chat' && (
         <ChatView
+          history={chatResultHistory}
           messages={chatMessages}
           mode={chatMode}
           result={chatResult}
           videoUrl={chatVideoUrl}
           topics={chatTopics}
-          chatBusy={chatBusy}
-          onRegenerate={() => void createVideo(chatMode)}
+          onCreativeBubble={handleBubbleClick}
+          onRegenerate={() => openRegeneratePanel(chatMode, activeCreationContextRef.current[chatMode])}
+          onRegenerateHistory={(item) => openRegeneratePanel(item.mode, item.context)}
           onPublish={() =>
             void publishVideo(chatVideoUrl, chatResult?.posterUrl, chatResult?.taskId, templateIdFor(chatMode))
           }
@@ -1654,9 +1908,11 @@ function App() {
 
       {view === 'library' && (
         <LibraryView
+          balance={typeof visibleBalance === 'number' ? visibleBalance : undefined}
           drafts={drafts}
           onDelete={deleteWork}
           onClearDraft={clearDraftResult}
+          onOpenBalance={() => setShowBalanceDetail(true)}
           onPickMode={chooseMode}
           onPublish={(record) => void publishVideo(record.videoUrl, record.posterUrl, record.taskId)}
           onUnlockHome={returnHome}
@@ -1674,7 +1930,8 @@ function App() {
           isWaiting={hasRunningTask}
           mode={mode}
           modeItems={modes}
-          preview={preview}
+          preview={hasRunningTask ? '' : preview}
+          prompt={getCreationPrompt(mode, selectedTemplate?.id)}
           showComposer={view === 'chat' || showQuickComposer}
           uploadSource={uploadSource}
           onAgreementChange={(accepted) => {
@@ -1711,6 +1968,15 @@ function App() {
           onViewUsageDetail={openUsageDetail}
         />
       )}
+      {showBalanceDetail && (
+        <BalanceModal
+          balance={tokenRemain}
+          visibleBalance={visibleBalance}
+          loginTemporarilyDisabled={temporarilyBypassMiguLogin}
+          onClose={() => setShowBalanceDetail(false)}
+          onViewOfficial={() => void openUsageDetail()}
+        />
+      )}
       {!temporarilyBypassMiguLogin && showLoginDialog && <LoginDialog onCancel={closeLoginDialog} onConfirm={confirmLogin} />}
       {showUsageNotice && <UsageNoticeSheet onAccept={confirmUsageNotice} onClose={closeUsageNotice} />}
       {showMediaSourceSheet && (
@@ -1718,6 +1984,7 @@ function App() {
       )}
       {showPermissionDialog && (
         <PermissionDialog
+          isIOS={usesIOSPermissionDialog}
           isJoint={!miguEnv.isInMiguAPP || miguEnv.isInMiniprogram}
           source={uploadSource}
           onCancel={closePermissionDialog}
@@ -1761,14 +2028,10 @@ function App() {
             }
           }}
           onCreate={() => {
-            setShowCreationPanel(false)
             void createVideo()
           }}
           onGenderChange={setGender}
-          onChooseMode={(nextMode) => {
-            setMode(nextMode)
-            if (!drafts[nextMode].file) void chooseSampleImage(nextMode, sampleImagesByMode[nextMode][0])
-          }}
+          onChooseMode={choosePanelMode}
           onPreviewImage={setPreviewImageUrl}
           onRemoveImage={removeUploadedImage}
           onOpenUsageNotice={() => {
@@ -1779,7 +2042,7 @@ function App() {
           }}
           onRequestUpload={requestUpload}
           onSelectSample={(sample) => void chooseSampleImage(mode, sample)}
-          onSelectTemplate={chooseTemplate}
+          onSelectTemplate={choosePanelTemplate}
         />
       )}
       {previewImageUrl && <ImagePreviewModal src={previewImageUrl} onClose={() => setPreviewImageUrl('')} onReplace={requestUpload} />}
@@ -1794,8 +2057,9 @@ function HomeView({
   templates,
   onBubbleClick,
   onChooseTemplate,
-  onOpenLibrary,
+  onOpenChat,
   onOpenTemplate,
+  onUseTemplate,
   onShuffle,
 }: {
   mode: ModeId
@@ -1803,8 +2067,9 @@ function HomeView({
   templates: TemplateItem[]
   onBubbleClick: (item: InspirationBubble) => void
   onChooseTemplate: (id: string) => void
-  onOpenLibrary: () => void
+  onOpenChat: () => void
   onOpenTemplate: (template: TemplateItem) => void
+  onUseTemplate: (template: TemplateItem) => void
   onShuffle: () => void
 }) {
   const topBubbles = inspirationBubbles.filter((_, index) => index % 2 === 0)
@@ -1832,17 +2097,6 @@ function HomeView({
         <p>用AI活化非遗影像，上传图片生成专属创意视频</p>
       </div>
 
-      <button className="campaign-banner" type="button" onClick={() => window.open('#activity', '_self')}>
-        <span className="gift-mark">
-          <Gift size={18} />
-        </span>
-        <span>
-          <strong>AI奇遇体验礼</strong>
-          <small>活动体验期免费生成，节日模板可快速配置</small>
-        </span>
-        <em>立即参与</em>
-      </button>
-
       <div
         className="bubble-row"
         aria-label="玩法快捷词条"
@@ -1863,6 +2117,7 @@ function HomeView({
           selectedId={selectedTemplate?.id || ''}
           onOpenTemplate={onOpenTemplate}
           onSelect={onChooseTemplate}
+          onUseTemplate={onUseTemplate}
         />
         <button className="shuffle-button" type="button" onClick={onShuffle}>
           <RefreshCw size={12} />
@@ -1870,8 +2125,8 @@ function HomeView({
         </button>
       </div>
 
-      <button className="history-toggle" type="button" onClick={onOpenLibrary}>
-        <Library size={14} />
+      <button className="history-toggle" type="button" onClick={onOpenChat}>
+        <MessageCircle size={14} />
         点击展示历史创作
       </button>
     </section>
@@ -1888,6 +2143,7 @@ function CreationDock({
   mode,
   modeItems,
   preview,
+  prompt,
   showComposer,
   uploadSource,
   onAgreementChange,
@@ -1908,6 +2164,7 @@ function CreationDock({
   mode: ModeId
   modeItems: ModeConfig[]
   preview: string
+  prompt: string
   showComposer: boolean
   uploadSource: UploadSource
   onAgreementChange: (accepted: boolean) => void
@@ -1949,12 +2206,24 @@ function CreationDock({
               {imageReviewing ? <Loader2 className="spin" size={23} /> : <Camera size={24} />}
             </button>
             <button className="prompt-input" type="button" onClick={onOpenCreationPanel}>
-              {preview ? <img src={preview} alt="" /> : null}
-              <span>{preview ? `已选择图片，使用${activeMode.short}模板` : activeMode.placeholder}</span>
+              {preview && !isWaiting ? <img src={preview} alt="" /> : null}
+              <span>
+                {isWaiting
+                  ? prompt
+                  : preview
+                    ? `已选择图片，使用${activeMode.short}模板`
+                    : activeMode.placeholder}
+              </span>
             </button>
-            <button className="send-button" type="button" disabled={busy || isWaiting || imageReviewing} onClick={onCreate}>
+            <button
+              className="send-button"
+              type="button"
+              disabled={imageReviewing}
+              aria-busy={busy || isWaiting}
+              onClick={onCreate}
+            >
               <small>消耗 3</small>
-              {busy || isWaiting ? '创作中' : '发送'}
+              发送
             </button>
           </div>
           <AgreementRow
@@ -1996,11 +2265,10 @@ function AgreementRow({
     <div className="agreement-row">
       <input id={inputId} type="checkbox" checked={accepted} onChange={(event) => onChange(event.target.checked)} />
       <span>
-        <label htmlFor={inputId}>已阅读</label>
+        <label htmlFor={inputId}>已阅读并同意</label>
         <button type="button" onClick={onOpenNotice}>
           《{usageNoticeTitle}》
         </button>
-        <label htmlFor={inputId}>并确认授权</label>
       </span>
     </div>
   )
@@ -2012,14 +2280,16 @@ function TemplateCarousel({
   selectedId,
   onOpenTemplate,
   onSelect,
+  onUseTemplate,
 }: {
   items: TemplateItem[]
   mode: ModeId
   selectedId: string
   onOpenTemplate: (template: TemplateItem) => void
   onSelect: (id: string) => void
+  onUseTemplate: (template: TemplateItem) => void
 }) {
-  const activeRef = useRef<HTMLButtonElement | null>(null)
+  const activeRef = useRef<HTMLElement | null>(null)
   const railRef = useRef<HTMLDivElement | null>(null)
   const selectedIndex = Math.max(0, items.findIndex((item) => item.id === selectedId))
   const displayItems = items.length > 2 ? [items[items.length - 1], ...items, items[0]] : items
@@ -2036,6 +2306,16 @@ function TemplateCarousel({
     const next = items[(selectedIndex + delta + items.length) % items.length]
     onSelect(next.id)
   }
+
+  useEffect(() => {
+    if (items.length <= 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') step(1)
+    }, 4200)
+    return () => window.clearInterval(timer)
+    // selectedId is intentionally included so each user selection gets a full preview interval.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, selectedId])
 
   return (
     <div className="template-carousel-shell">
@@ -2054,26 +2334,30 @@ function TemplateCarousel({
         {displayItems.map((item, displayIndex) => {
           const selected = item.id === selectedId && (items.length <= 2 || displayIndex === selectedIndex + 1)
           return (
-            <button
+            <article
               key={`${item.id}-${displayIndex}`}
               ref={selected ? activeRef : undefined}
-              type="button"
               className={selected ? 'template-card selected' : 'template-card'}
               onMouseEnter={() => onSelect(item.id)}
-              onClick={() => {
-                if (!selected) {
-                  onSelect(item.id)
-                  return
-                }
-                onOpenTemplate(item)
-              }}
             >
-              <TemplateMedia item={item} />
+              <button
+                className="template-preview-button"
+                type="button"
+                aria-label={`查看${item.title}模板详情`}
+                onClick={() => {
+                  onSelect(item.id)
+                  onOpenTemplate(item)
+                }}
+              >
+                <TemplateMedia item={item} preferVideo />
+              </button>
               <AiContentPageMark />
               <span>{modeLabels[mode]}</span>
               <strong>{item.title}</strong>
-              <em>做同款</em>
-            </button>
+              <button className="template-use-button" type="button" onClick={() => onUseTemplate(item)}>
+                做同款
+              </button>
+            </article>
           )
         })}
       </div>
@@ -2118,6 +2402,15 @@ function TemplateDetail({
     setIsPlaying(false)
   }
 
+  function toggleDetailSound() {
+    const video = videoRef.current
+    if (!video) return
+    video.muted = !video.muted
+    video.defaultMuted = video.muted
+    if (!video.muted) video.volume = 1
+    setIsMuted(video.muted)
+  }
+
   return (
     <section className="detail-view">
       <button className="detail-back" type="button" onClick={onBack} aria-label="返回首页">
@@ -2142,6 +2435,19 @@ function TemplateDetail({
         <AiContentPageMark />
         {template.videoUrl && (
           <button
+            className="detail-sound-toggle"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              toggleDetailSound()
+            }}
+            aria-label={isMuted ? '开启声音' : '关闭声音'}
+          >
+            {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          </button>
+        )}
+        {template.videoUrl && (
+          <button
             className={`play-button ${isPlaying ? 'playing' : ''}`}
             type="button"
             onClick={(event) => {
@@ -2158,12 +2464,6 @@ function TemplateDetail({
           <strong>{template.title}</strong>
           <span>AI生成 · {activeMode.short}</span>
         </div>
-      </div>
-      <div className="detail-meta">
-        <span>模板ID：{template.id}</span>
-        <span>视频彩铃ID：ring-{template.id}</span>
-        <span>模型：Seedance</span>
-        <span>时长：约10秒</span>
       </div>
       <button className="detail-use" type="button" onClick={onUse}>
         做同款
@@ -2189,102 +2489,161 @@ function AiContentPageMark() {
   )
 }
 
-function TemplateMedia({ item, className = '' }: { item: TemplateItem; className?: string }) {
-  if (item.imageUrl) return <img className={className} src={item.imageUrl} alt="" />
+function TemplateMedia({ item, className = '', preferVideo = false }: { item: TemplateItem; className?: string; preferVideo?: boolean }) {
+  if (preferVideo && item.videoUrl) {
+    return <video className={className} src={item.videoUrl} poster={item.imageUrl} muted autoPlay loop playsInline preload="metadata" />
+  }
+  if (item.imageUrl) return <img className={className} src={item.imageUrl} alt="" loading="lazy" decoding="async" />
   if (item.videoUrl) return <VideoPosterFrame src={item.videoUrl} className={className} />
-  return <img className={className} src={fallbackTemplateImage} alt="" />
+  return <img className={className} src={fallbackTemplateImage} alt="" loading="lazy" decoding="async" />
 }
 
 function ChatView({
+  history,
   messages,
   mode,
   result,
   videoUrl,
   topics,
-  chatBusy,
+  onCreativeBubble,
   onRegenerate,
+  onRegenerateHistory,
   onPublish,
   onTopic,
   onUnlockHome,
 }: {
+  history: ChatResultHistoryItem[]
   messages: ChatMessage[]
   mode: ModeId
   result: CreateResult | null
   videoUrl?: string
   topics: typeof chatTopics
-  chatBusy: boolean
+  onCreativeBubble: (item: InspirationBubble) => void
   onRegenerate: () => void
+  onRegenerateHistory: (item: ChatResultHistoryItem) => void
   onPublish: () => void
   onTopic: (topic: (typeof chatTopics)[number]) => void | Promise<void>
   onUnlockHome: () => void
 }) {
-  const taskProgress = result ? getTaskProgress(result) : 0
+  const creativeBubbles = inspirationBubbles.filter((item) => item.mode === mode)
 
   return (
     <section className={result ? 'chat-view generation-view' : 'chat-view'}>
       <div className="message-list">
         {messages.map((message) => (
           <div key={message.id} className={`message ${message.role}${message.loading ? ' loading' : ''}`}>
-            {message.text}
+            {message.imageUrl && <img className="message-image" src={message.imageUrl} alt="本次创作图片" />}
+            <span>{message.text}</span>
           </div>
         ))}
 
-        {result && (
-          <article className={`task-card status-${videoUrl ? 'succeeded' : result.status}`}>
-            <div className="task-thumb">
-              {videoUrl ? (
-                <VideoPosterFrame src={videoUrl} poster={result.posterUrl || ''} showPageMark={false} />
-              ) : (
-                <>
-                  {result.status === 'failed' ? <X size={24} /> : <Loader2 className="spin" size={30} />}
-                  <span>{result.status === 'failed' ? '失败' : `${taskProgress}%`}</span>
-                </>
-              )}
-            </div>
-            <div className="task-info">
-              <strong>{videoUrl ? result.templateTitle || modeLabels[mode] : result.status === 'failed' ? '生成失败' : 'AI非遗视频创作中...'}</strong>
-              {videoUrl ? (
-                <>
-                  <p>看一看，不喜欢就再来一版</p>
-                  <div className="task-actions">
-                    <button type="button" onClick={onRegenerate}>
-                      <RefreshCw size={14} />
-                      重新生成
-                    </button>
-                    <button className="publish-action" type="button" onClick={onPublish}>
-                      <Bell size={14} />
-                      发布视频
-                    </button>
-                  </div>
-                </>
-              ) : result.status === 'failed' ? (
-                <p>{result.message}</p>
-              ) : (
-                <span className="sr-only">正在生成你的专属创意视频，请稍候</span>
-              )}
-            </div>
-          </article>
-        )}
+        {history.map((item) => (
+          <ChatTaskCard
+            key={item.id}
+            mode={item.mode}
+            result={item.result}
+            videoUrl={item.result.videoUrl || item.result.previewUrl}
+            onRegenerate={item.result.status === 'succeeded' ? () => onRegenerateHistory(item) : undefined}
+          />
+        ))}
 
-        {(!result || videoUrl) && (
+        {result && <ChatTaskCard mode={mode} result={result} videoUrl={videoUrl} onPublish={onPublish} onRegenerate={onRegenerate} />}
+
+        {!result ? (
           <>
             <div className="try-divider">试试新创意</div>
             {topics.map((topic) => (
-              <button key={topic.prompt} className="topic-chip" type="button" onClick={() => void onTopic(topic)} disabled={chatBusy}>
+              <button key={topic.prompt} className="topic-chip" type="button" onClick={() => void onTopic(topic)}>
                 {topic.prompt}
               </button>
             ))}
           </>
+        ) : (
+          <>
+            <div className="try-divider">试试同类创意</div>
+            {creativeBubbles.map((item) => {
+              const Icon = item.icon
+              return (
+                <button key={item.id} className="topic-chip creative" type="button" onClick={() => onCreativeBubble(item)}>
+                  <Icon size={15} />
+                  {item.label}
+                </button>
+              )
+            })}
+          </>
         )}
       </div>
 
-      {(!result || videoUrl) && (
+      {!result && (
         <button className="unlock-home" type="button" onClick={onUnlockHome}>
           <Wand2 size={14} />
           点击解锁更多玩法
         </button>
       )}
     </section>
+  )
+}
+
+function ChatTaskCard({
+  mode,
+  result,
+  videoUrl,
+  onRegenerate,
+  onPublish,
+}: {
+  mode: ModeId
+  result: CreateResult
+  videoUrl?: string
+  onRegenerate?: () => void
+  onPublish?: () => void
+}) {
+  const taskProgress = getTaskProgress(result)
+  return (
+    <article className={`task-card status-${videoUrl ? 'succeeded' : result.status}`}>
+      <div className="task-thumb">
+        {videoUrl ? (
+          <VideoPosterFrame src={videoUrl} poster={result.posterUrl || ''} showPageMark={false} />
+        ) : (
+          <>
+            {result.status === 'failed' ? <X size={24} /> : <Loader2 className="spin" size={30} />}
+            <span>{result.status === 'failed' ? '失败' : `${taskProgress}%`}</span>
+          </>
+        )}
+      </div>
+      <div className="task-info">
+        <strong>{videoUrl ? result.templateTitle || modeLabels[mode] : result.status === 'failed' ? '生成失败' : 'AI非遗视频创作中...'}</strong>
+        {videoUrl ? (
+          <>
+            <p>看一看，不喜欢可以再来一版</p>
+            {(onRegenerate || onPublish) && (
+              <div className="task-actions">
+                {onRegenerate && (
+                  <button type="button" onClick={onRegenerate}>
+                    <RefreshCw size={14} />
+                    重新生成
+                  </button>
+                )}
+                {onPublish && (
+                  <button className="publish-action" type="button" onClick={onPublish}>
+                    <Bell size={14} />
+                    发布
+                  </button>
+                )}
+              </div>
+            )}
+          </>
+        ) : result.status === 'failed' ? (
+          <p>{getChatFailureMessage(result.message)}</p>
+        ) : (
+          <>
+            <p className="task-wait-hint">正在生成你的专属创意视频，请稍候</p>
+            <div className="task-progress" aria-label={`创作进度 ${taskProgress}%`}>
+              <span style={{ width: `${taskProgress}%` }} />
+            </div>
+          </>
+        )}
+      </div>
+    </article>
   )
 }
 
@@ -2512,19 +2871,23 @@ function PreviewVideo({ src, poster = '', className = '' }: { src: string; poste
 }
 
 function LibraryView({
+  balance,
   drafts,
   works,
   onClearDraft,
   onDelete,
   onPickMode,
+  onOpenBalance,
   onPublish,
   onUnlockHome,
 }: {
+  balance?: number
   drafts: Record<ModeId, ModeDraft>
   works: WorkItem[]
   onClearDraft: (mode: ModeId) => void
   onDelete: (id: string) => void
   onPickMode: (mode: ModeId) => void
+  onOpenBalance: () => void
   onPublish: (record: CreationRecord) => void
   onUnlockHome: () => void
 }) {
@@ -2533,6 +2896,9 @@ function LibraryView({
   const [playRecord, setPlayRecord] = useState<CreationRecord | null>(null)
   const [redoRecord, setRedoRecord] = useState<CreationRecord | null>(null)
   const [deleteRecord, setDeleteRecord] = useState<CreationRecord | null>(null)
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(() => new Set())
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false)
   const records = buildCreationRecords(works, drafts)
 
   function deleteRecordNow(record: CreationRecord) {
@@ -2546,21 +2912,45 @@ function LibraryView({
     onPickMode(record.mode)
   }
 
+  function toggleBatchMode() {
+    setBatchMode((current) => !current)
+    setSelectedRecordIds(new Set())
+  }
+
+  function toggleRecordSelection(id: string) {
+    setSelectedRecordIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function deleteSelectedRecords() {
+    records.filter((record) => selectedRecordIds.has(record.id)).forEach((record) => {
+      if (record.source === 'work') onDelete(record.id)
+      else onClearDraft(record.mode)
+    })
+    setConfirmBatchDelete(false)
+    setSelectedRecordIds(new Set())
+    setBatchMode(false)
+  }
+
   return (
     <section className="library-view">
       <div className="library-titlebar">
-        <button type="button" onClick={onUnlockHome} aria-label="返回首页">
-          <ArrowLeft size={20} />
-        </button>
         <h1>我的作品</h1>
-        <span className="usage-detail">+ 100&nbsp;&nbsp;使用明细</span>
+        <button className="usage-detail" type="button" onClick={onOpenBalance}>
+          {balance ?? '--'} 分贝&nbsp;&nbsp;使用明细
+        </button>
       </div>
 
       <div className="retention-banner">预览的AI内容保留6个月，请及时发布</div>
 
       <div className="library-grid-tools">
-        <button type="button" aria-label="宫格视图">
+        <button className={batchMode ? 'active' : ''} type="button" onClick={toggleBatchMode} aria-label={batchMode ? '退出批量管理' : '批量管理'}>
           <Grid2X2 size={18} />
+          <span>{batchMode ? '完成' : '批量管理'}</span>
         </button>
       </div>
 
@@ -2580,14 +2970,26 @@ function LibraryView({
           {records.map((record) => (
             <CreationRecordCard
               key={record.id}
+              batchMode={batchMode}
               record={record}
+              selected={selectedRecordIds.has(record.id)}
               onDelete={() => setDeleteRecord(record)}
               onMore={() => setActionRecord(record)}
               onOpenVideo={() => setPlayRecord(record)}
               onPublish={() => onPublish(record)}
               onRedo={() => setRedoRecord(record)}
+              onToggle={() => toggleRecordSelection(record.id)}
             />
           ))}
+        </div>
+      )}
+
+      {batchMode && records.length > 0 && (
+        <div className="batch-action-bar">
+          <span>已选择 {selectedRecordIds.size} 项</span>
+          <button type="button" disabled={!selectedRecordIds.size} onClick={() => setConfirmBatchDelete(true)}>
+            <Trash2 size={15} /> 删除
+          </button>
         </div>
       )}
 
@@ -2611,7 +3013,13 @@ function LibraryView({
       )}
 
       {detailRecord && <RecordDetailModal record={detailRecord} onClose={() => setDetailRecord(null)} />}
-      {playRecord && <RecordVideoModal record={playRecord} onClose={() => setPlayRecord(null)} />}
+      {playRecord && (
+        <RecordVideoModal
+          record={playRecord}
+          onClose={() => setPlayRecord(null)}
+          onPublish={() => onPublish(playRecord)}
+        />
+      )}
       {redoRecord && (
         <ConfirmDialog
           title="提示"
@@ -2630,41 +3038,63 @@ function LibraryView({
           onConfirm={() => deleteRecordNow(deleteRecord)}
         />
       )}
+      {confirmBatchDelete && (
+        <ConfirmDialog
+          title="批量删除"
+          message={`将删除已选择的 ${selectedRecordIds.size} 项记录，删除后无法恢复，是否继续？`}
+          confirmText="删除"
+          onCancel={() => setConfirmBatchDelete(false)}
+          onConfirm={deleteSelectedRecords}
+        />
+      )}
     </section>
   )
 }
 
 function CreationRecordCard({
+  batchMode,
   record,
+  selected,
   onDelete,
   onMore,
   onOpenVideo,
   onPublish,
   onRedo,
+  onToggle,
 }: {
+  batchMode: boolean
   record: CreationRecord
+  selected: boolean
   onDelete: () => void
   onMore: () => void
   onOpenVideo: () => void
   onPublish: () => void
   onRedo: () => void
+  onToggle: () => void
 }) {
   const statusClass = record.status === 'succeeded' ? 'success' : record.status === 'failed' ? 'failed' : 'running'
 
   return (
-    <article className={`creation-record-card ${statusClass}`}>
+    <article className={`creation-record-card ${statusClass}${batchMode ? ' batch-mode' : ''}${selected ? ' selected' : ''}`}>
       <div
         className="record-media"
-        onClick={record.status === 'succeeded' ? onOpenVideo : undefined}
+        onClick={batchMode ? onToggle : record.status === 'succeeded' ? onOpenVideo : undefined}
         onKeyDown={(event) => {
-          if (record.status === 'succeeded' && ['Enter', ' '].includes(event.key)) onOpenVideo()
+          if (!['Enter', ' '].includes(event.key)) return
+          if (batchMode) onToggle()
+          else if (record.status === 'succeeded') onOpenVideo()
         }}
-        role={record.status === 'succeeded' ? 'button' : undefined}
-        tabIndex={record.status === 'succeeded' ? 0 : undefined}
+        role={batchMode || record.status === 'succeeded' ? 'button' : undefined}
+        tabIndex={batchMode || record.status === 'succeeded' ? 0 : undefined}
       >
+        {batchMode && (
+          <span className="record-select-mark" aria-label={selected ? '已选择' : '未选择'}>
+            {selected && <Check size={15} />}
+          </span>
+        )}
         {record.status === 'succeeded' && record.videoUrl ? (
           <>
-            <VideoPosterFrame src={record.videoUrl} poster={record.posterUrl || ''} />
+            <VideoPosterFrame src={record.videoUrl} poster={record.posterUrl || ''} showPageMark={false} />
             <span className="record-play">
               <Play size={20} fill="currentColor" />
             </span>
@@ -2678,12 +3108,13 @@ function CreationRecordCard({
         ) : (
           <div className="record-running-state">
             <Sparkles size={28} />
-            <strong>88.8%</strong>
+            <strong>{getTaskProgress(record)}%</strong>
+            <div className="record-progress"><span style={{ width: `${getTaskProgress(record)}%` }} /></div>
           </div>
         )}
         <div className="record-gradient" />
         <strong className="record-title">{record.title}</strong>
-        <button
+        {!batchMode && <button
           className="record-more"
           type="button"
           onClick={(event) => {
@@ -2693,19 +3124,19 @@ function CreationRecordCard({
           aria-label="更多操作"
         >
           <EllipsisVertical size={18} />
-        </button>
+        </button>}
       </div>
 
-      {record.status === 'succeeded' ? (
+      {!batchMode && record.status === 'succeeded' ? (
         <div className="record-actions">
           <button type="button" onClick={onPublish}>
-            发布视频
+            发布
           </button>
           <button type="button" onClick={onRedo}>
             再次创作
           </button>
         </div>
-      ) : record.status === 'failed' ? (
+      ) : !batchMode && record.status === 'failed' ? (
         <div className="record-actions">
           <button type="button" onClick={onRedo}>
             再次创作
@@ -2719,7 +3150,15 @@ function CreationRecordCard({
   )
 }
 
-function RecordVideoModal({ record, onClose }: { record: CreationRecord; onClose: () => void }) {
+function RecordVideoModal({
+  record,
+  onClose,
+  onPublish,
+}: {
+  record: CreationRecord
+  onClose: () => void
+  onPublish: () => void
+}) {
   if (!record.videoUrl) return null
 
   return (
@@ -2732,6 +3171,9 @@ function RecordVideoModal({ record, onClose }: { record: CreationRecord; onClose
         <strong>{record.title}</strong>
         <span>点击播放按钮开启声音</span>
       </div>
+      <button className="record-video-publish" type="button" onClick={onPublish}>
+        发布视频
+      </button>
     </div>
   )
 }
@@ -2834,12 +3276,10 @@ function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose
         <h2 id="usage-notice-title">{usageNoticeTitle}</h2>
         <div className="notice-copy">
           <p>
-            1. AI非遗文化skill服务由<strong>{serviceProviderName}</strong>提供。您同意使用本服务并上传图片，视为您授权
-            <strong>{serviceProviderName}</strong>在本次服务内使用，<strong>您需对上传的图片/文字的版权负责</strong>
-            。系统将通过后期技术在页面上生成新的AI创意视频，在此过程中，您所上传的图片将仅被用于本服务。如您上传的内容出现版权纠纷，
+            1. AI智创彩铃服务由<strong>{serviceProviderName}</strong>提供，您同意使用本服务并上传图片，视为您授权
+            <strong>{serviceProviderName}</strong>在本次服务内使用，您需对上传图片的版权负责。系统将通过后期技术在页面上生成新的AI创意视频，在此过程中，您所上传的图片将仅被用于本服务。如您上传的内容出现版权纠纷，
             <strong>{serviceProviderName}</strong>
-            可删除您上传的素材及制作的内容。咪咕音乐不承担因此带来的任何第三方责任及法律风险。请仔细阅读《{usageNoticeTitle}
-            》，您接受协议所述条款和条件后方可点击“我已阅读并同意”，或勾选“已阅读并同意《{usageNoticeTitle}》”。
+            可删除您上传的素材及制作的内容。咪咕音乐不承担因此带来的任何第三方责任及法律风险。请仔细阅读《{usageNoticeTitle}》，您接受协议所述条款和条件后方可点击“我已阅读并同意”，或勾选“已阅读并同意《{usageNoticeTitle}》”。
           </p>
           <p>
             2. 请上传清晰的图片。
@@ -2850,13 +3290,12 @@ function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose
             否则，造成的一切后果及损失由您自行承担。
           </p>
           <p>
-            3.
-            本管理政策如果有未涉及的情况，则参考《咪咕用户服务协议》和相关法律法规及政策要求处理。用户违反上述规定的，咪咕音乐有权依据《咪咕用户服务协议》和本公告处理。
+            3. 本管理政策如果有未涉及的情况，则参考《咪咕用户服务协议》和相关法律法规及政策要求处理。用户违反上述规定的，咪咕音乐有权依据《咪咕用户服务协议》和本公告处理。
           </p>
           <p className="privacy-policy-link">
             本公司的隐私政策链接：
             <a href={privacyPolicyUrl} target="_blank" rel="noreferrer">
-              《咪咕音乐隐私政策》
+              《隐私政策》
             </a>
           </p>
         </div>
@@ -2900,7 +3339,6 @@ function MediaSourceSheet({
       <section className="bottom-sheet media-source-sheet" role="dialog" aria-modal="true" aria-labelledby="media-source-title">
         <div className="sheet-handle" />
         <h2 id="media-source-title">请选择照片来源</h2>
-        <p>相机和相册权限分别记录，已授权后不会重复询问。</p>
         <div className="media-source-actions">
           <button type="button" onClick={() => onChoose('camera')}>
             <Camera size={22} />
@@ -2938,25 +3376,41 @@ function ReviewingOverlay({ kind }: { kind: 'machine' | 'face' }) {
 }
 
 function PermissionDialog({
+  isIOS,
   isJoint,
   source,
   onCancel,
   onConfirm,
 }: {
+  isIOS: boolean
   isJoint: boolean
   source: UploadSource
   onCancel: () => void
   onConfirm: () => void
 }) {
+  if (isIOS) {
+    return (
+      <div className="modal-backdrop soft permission-backdrop ios-permission-backdrop" role="presentation">
+        <section className="permission-dialog ios-permission-dialog" role="dialog" aria-modal="true" aria-labelledby="ios-permission-copy">
+          <p id="ios-permission-copy">访问您的相机/储存，用于AI应用内容创作服务</p>
+          <div className="dialog-actions">
+            <button type="button" onClick={onCancel}>取消</button>
+            <button type="button" onClick={onConfirm}>确定</button>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
   return (
     <div className="modal-backdrop soft permission-backdrop" role="presentation">
       <section className="permission-dialog" role="dialog" aria-modal="true" aria-labelledby="permission-title">
         <ShieldCheck size={24} />
-        <h2 id="permission-title">请您选择照片</h2>
+        <h2 id="permission-title">请允许我们使用{isJoint ? '相机/相册' : source === 'camera' ? '相机' : '相册'}</h2>
         <p>
           {isJoint
-            ? '需要允许访问相机和相册，用于AI应用内容创作服务。'
-            : `需要允许访问${source === 'camera' ? '相机' : '相册'}，授权状态将被记住。`}
+            ? '我们需要相机/相册权限，用于AI应用内容创作服务。'
+            : `我们需要${source === 'camera' ? '相机' : '相册'}权限，用于AI应用内容创作服务。`}
         </p>
         <div className="dialog-actions">
           <button type="button" onClick={onCancel}>
@@ -3217,6 +3671,8 @@ function CreationPanel({
 }) {
   const selectedSampleId = samples.find((sample) => sample.imageUrl === preview)?.id
   const hasUploadedPreview = Boolean(preview && !selectedSampleId)
+  const templateIndex = Math.max(0, templates.findIndex((item) => item.id === selectedTemplate?.id))
+  const contextualSample = samples[templateIndex % samples.length] || samples[0]
 
   return (
     <div className="sheet-backdrop panel-backdrop" role="presentation" onClick={onClose}>
@@ -3259,19 +3715,19 @@ function CreationPanel({
               <CheckBadge />
             </div>
           )}
-          {samples.map((sample, index) => (
+          {contextualSample && (
             <button
-              key={sample.id}
-              className={sample.id === selectedSampleId ? 'asset-tile sample-tile selected' : 'asset-tile sample-tile'}
+              className={contextualSample.id === selectedSampleId ? 'asset-tile sample-tile selected' : 'asset-tile sample-tile'}
               type="button"
-              title={sample.title}
-              aria-label={`选择${activeMode.short}样例图${index + 1}`}
-              onClick={() => onSelectSample(sample)}
+              title={contextualSample.title}
+              aria-label={`选择${activeMode.short}示例图`}
+              onClick={() => onSelectSample(contextualSample)}
             >
-              <img src={sample.thumbnailUrl} alt={sample.title} width={240} height={240} decoding="async" />
-              {sample.id === selectedSampleId && <CheckBadge />}
+              <img src={contextualSample.thumbnailUrl} alt={contextualSample.title} width={240} height={240} decoding="async" />
+              <span className="sample-label">示例</span>
+              {contextualSample.id === selectedSampleId && <CheckBadge />}
             </button>
-          ))}
+          )}
         </div>
         {mode === 'costume' && (
           <>
@@ -3379,8 +3835,7 @@ function InfoModal({
         </button>
         <h2 id="info-title">应用说明</h2>
         <p>
-          1、本服务由<strong>{serviceProviderName}</strong>提供
-          {loginTemporarilyDisabled ? '，当前测试期间可直接使用。' : '，需要登录后方可使用。'}
+          1、本服务由<strong>{serviceProviderName}</strong>提供，需要登录后方可使用。
         </p>
         <p>2、应用在标注“活动体验”期间无需支付使用费用。在没有标注“活动体验”时使用创作服务就会开始收费（收费标准结合AI研发和算力成本制定）。</p>
         {!loginTemporarilyDisabled && (
@@ -3391,6 +3846,40 @@ function InfoModal({
         <button type="button" onClick={onClose}>
           知道了
         </button>
+      </section>
+    </div>
+  )
+}
+
+function BalanceModal({
+  balance,
+  visibleBalance,
+  loginTemporarilyDisabled,
+  onClose,
+  onViewOfficial,
+}: {
+  balance: TokenRemainInfo | null
+  visibleBalance: number | string
+  loginTemporarilyDisabled: boolean
+  onClose: () => void
+  onViewOfficial: () => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section className="balance-modal" role="dialog" aria-modal="true" aria-labelledby="balance-title" onClick={(event) => event.stopPropagation()}>
+        <button className="modal-close" type="button" onClick={onClose} aria-label="关闭">×</button>
+        <h2 id="balance-title">分贝余额</h2>
+        <strong className="balance-total">{visibleBalance}</strong>
+        <dl>
+          <div><dt>体验分贝</dt><dd>{balance?.experienceCount ?? '--'}</dd></div>
+          <div><dt>权益次数</dt><dd>{balance?.rightsCount ?? '--'}</dd></div>
+          <div><dt>已消耗分贝</dt><dd>{balance?.consumePointsCount ?? '--'}</dd></div>
+        </dl>
+        {loginTemporarilyDisabled ? (
+          <p>当前为免登录测试模式，接入登录与计费接口后会显示实时明细。</p>
+        ) : (
+          <button className="balance-detail-link" type="button" onClick={onViewOfficial}>查看完整使用明细</button>
+        )}
       </section>
     </div>
   )
@@ -3509,6 +3998,24 @@ function getRecordFailureMessage(message: string) {
   return '使用人数过多，生成失败'
 }
 
+function getChatFailureMessage(message: string) {
+  if (/审核|PolicyViolation|SensitiveContent|Copyright|违规|不适合|199999|500027|300103/.test(message)) {
+    return '这个内容不适合展示哦'
+  }
+  if (/朗读|音频|准确率|500101/.test(message)) return '朗读内容准确率低，请重新录制后重试'
+  if (/500012|500013|500014|500015|500016|500017|500018|500019|500002|500003|500004|500005|500007|500020|500021|500028/.test(message)) {
+    return '功能过于火爆，可尝试重新生成'
+  }
+  return '功能过于火爆，稍后再来，给您留座哦！'
+}
+
+function getCreationPrompt(mode: ModeId, templateId?: string) {
+  if (templateId && creationPromptByTemplateId[templateId]) return creationPromptByTemplateId[templateId]
+  if (mode === 'costume') return '结合图片，生成一段非遗服饰变装视频'
+  if (mode === 'food') return '结合图片，生成一段10秒Q版非遗美食微缩景观趣味讲解视频'
+  return '结合图片，生成一段传统画作活化视频'
+}
+
 function getRecordStatusText(status: TaskStatus) {
   if (status === 'succeeded') return '生成成功'
   if (status === 'failed') return '生成失败'
@@ -3540,13 +4047,6 @@ function getTaskProgress(result: CreateResult) {
   if (/上传|素材/.test(message)) return 28
   if (result.status === 'running') return 62
   return 18
-}
-
-function getLocalChatFallback(message: string) {
-  if (/早|上午|早上好/.test(message)) return '早上好！今天适合从一张照片开始，把非遗记忆做成会动的小短片。'
-  if (/笑话|冷笑话/.test(message)) return '为什么可乐从不吵架？因为它一开口就冒泡。轻松一下，灵感也会跟着冒出来。'
-  if (/幸运|数字|颜色|色/.test(message)) return '今天的幸运数是 9，幸运色是晴空蓝，刚好适合做一支 9:16 竖版视频。'
-  return '收到，这个话题可以先轻松聊聊；也可以上传一张图片，我来帮你生成非遗创意短片。'
 }
 
 function clamp(value: number, min: number, max: number) {

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import test from 'node:test'
 import {
+  buildLoginRedirectUrl,
   buildPublishRedirectUrl,
   buildTaskIdRedirectUrl,
   cancelTokenTask,
@@ -9,6 +11,53 @@ import {
   reportTokenResult,
   validatePublishMediaUrl,
 } from './miguAigc.js'
+
+test('uses the dedicated login key and signature key when minting cToken', async () => {
+  const originalFetch = globalThis.fetch
+  const names = [
+    'MIGU_AIGC_APP_ID',
+    'MIGU_AIGC_APP_SECRET',
+    'MIGU_CHANNEL_CODE',
+    'MIGU_CALLBACK_URL',
+    'MIGU_CHANNEL_LOGIN_SIGN_KEY',
+    'MIGU_CHANNEL_LOGIN_KEY',
+  ]
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'legacy-secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+    MIGU_CHANNEL_LOGIN_SIGN_KEY: 'dedicated-signature-key',
+    MIGU_CHANNEL_LOGIN_KEY: 'dedicated-login-key',
+  })
+
+  let loginPayload
+  globalThis.fetch = async (requestUrl) => {
+    const request = new URL(String(requestUrl))
+    loginPayload = JSON.parse(request.searchParams.get('data'))
+    return new Response(JSON.stringify({ token: 'one-time-token' }), { status: 200 })
+  }
+
+  try {
+    const redirect = new URL(await buildLoginRedirectUrl())
+    assert.equal(loginPayload.channelCode, 'channel-id')
+    assert.equal(loginPayload.key, 'dedicated-login-key')
+    assert.equal(
+      loginPayload.signature,
+      crypto.createHash('md5').update(`channel-id${loginPayload.timestamp}dedicated-signature-key`).digest('hex'),
+    )
+    assert.equal(redirect.searchParams.get('cToken'), 'one-time-token')
+    assert.equal(redirect.searchParams.get('schannel'), 'channel-id')
+    assert.equal(redirect.searchParams.get('cburl'), 'https://example.com/callback')
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]
+      else process.env[name] = previous[name]
+    }
+  }
+})
 
 test('requires a positive entitlement count before requesting taskId', () => {
   assert.equal(hasUsableTokenEntitlement(null), false)

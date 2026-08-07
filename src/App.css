@@ -1720,6 +1720,48 @@ button:disabled {
   line-height: 1.5;
 }
 
+.ios-permission-backdrop {
+  background: rgba(15, 22, 32, 0.5);
+}
+
+.ios-permission-dialog {
+  width: min(358px, calc(100% - 48px));
+  border-radius: 11px;
+  padding: 0;
+  color: #111;
+  background: #fff;
+  text-align: left;
+  box-shadow: 0 12px 36px rgba(15, 22, 32, 0.2);
+}
+
+.ios-permission-dialog p {
+  min-height: 116px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 24px 20px;
+  color: #111;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.ios-permission-dialog .dialog-actions {
+  border-top-color: #dfe3e8;
+}
+
+.ios-permission-dialog .dialog-actions button {
+  min-height: 64px;
+  color: #111;
+  background: #fff;
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.ios-permission-dialog .dialog-actions button + button {
+  border-left: 1px solid #dfe3e8;
+}
+
 .dialog-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1737,6 +1779,11 @@ button:disabled {
 .dialog-actions button:first-child {
   border-right: 1px solid #edf1f7;
   color: #526176;
+}
+
+.ios-permission-dialog .dialog-actions button:first-child {
+  border-right: 0;
+  color: #111;
 }
 
 .crop-header {
@@ -2528,6 +2575,285 @@ button:disabled {
 
   .creation-record-grid {
     gap: 12px 8px;
+  }
+}
+
+/* P1：模板预览、对话任务、作品批量管理及窄屏适配 */
+.template-preview-button {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.template-card::after,
+.template-card > span,
+.template-card > strong {
+  pointer-events: none;
+}
+
+.template-card .template-use-button {
+  position: absolute;
+  z-index: 4;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  display: grid;
+  width: auto;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  color: #fff;
+  background: rgba(25, 32, 24, 0.46);
+  box-shadow: none;
+  backdrop-filter: blur(1px);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.template-card .template-use-button:hover {
+  background: rgba(25, 32, 24, 0.52);
+}
+
+.sample-tile .sample-label {
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  left: 4px;
+  border-radius: 5px;
+  padding: 2px 5px;
+  color: #fff;
+  background: rgba(18, 28, 55, 0.72);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.library-grid-tools button {
+  display: inline-flex;
+  width: auto;
+  min-width: 86px;
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.library-grid-tools button.active {
+  color: #2467f2;
+  background: #edf3ff;
+}
+
+.record-select-mark {
+  position: absolute;
+  z-index: 8;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(18, 28, 55, 0.35);
+  box-shadow: 0 2px 8px rgba(18, 28, 55, 0.2);
+}
+
+.creation-record-card.selected .record-select-mark {
+  background: #447cff;
+}
+
+.creation-record-card.selected .record-media {
+  box-shadow: 0 0 0 3px #447cff;
+}
+
+.record-progress {
+  width: 72%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.record-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #fff;
+}
+
+.batch-action-bar {
+  position: sticky;
+  z-index: 30;
+  bottom: 12px;
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  border: 1px solid #e1e8f3;
+  border-radius: 27px;
+  padding: 7px 9px 7px 16px;
+  color: #526078;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 32px rgba(31, 73, 133, 0.18);
+  backdrop-filter: blur(12px);
+  font-size: 12px;
+}
+
+.batch-action-bar button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 19px;
+  padding: 0 16px;
+  color: #fff;
+  background: #f04f55;
+}
+
+.batch-action-bar button:disabled {
+  opacity: 0.45;
+}
+
+.view-chat .title-button strong {
+  max-width: 142px;
+  font-size: clamp(13px, 3.8vw, 15px);
+}
+
+.view-chat .app-topbar {
+  grid-template-columns: 32px minmax(108px, 1fr) auto;
+  gap: 4px;
+}
+
+.view-chat .app-topbar .topbar-actions {
+  min-width: 104px;
+  gap: 4px;
+}
+
+.view-chat .works-pill {
+  padding: 0 8px;
+}
+
+.creation-dock.with-composer .upload-preview {
+  overflow: hidden;
+  border: 1px solid #edf0f5;
+}
+
+.creation-dock.with-composer .camera-button {
+  box-shadow: none;
+}
+
+.creation-dock.with-composer .prompt-input {
+  border-left: 1px solid #edf0f5;
+}
+
+.generation-view .task-card {
+  width: min(238px, 72vw);
+  justify-self: start;
+}
+
+.generation-view .task-card:not(.status-succeeded) {
+  position: relative;
+  display: flex;
+  min-height: 300px;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  border-radius: 12px;
+  padding: 22px 18px;
+  color: #fff;
+  background: linear-gradient(145deg, #5d99ff, #73d8f4);
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  align-content: center;
+  gap: 8px;
+  border-radius: 0;
+  background: transparent;
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-thumb span {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-info {
+  position: relative;
+  z-index: 2;
+  color: #fff;
+  text-align: center;
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-info strong,
+.generation-view .task-card:not(.status-succeeded) .task-info p {
+  color: #fff;
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-progress {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-progress span {
+  background: #fff;
+  box-shadow: none;
+}
+
+.generation-view .task-card.status-succeeded {
+  display: grid;
+  width: min(252px, 76vw);
+  height: auto;
+  min-height: 0;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 10px;
+  background: #eef0f3;
+}
+
+.generation-view .task-card.status-succeeded .task-thumb {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 9 / 13;
+  border-radius: 8px;
+}
+
+.generation-view .task-card.status-succeeded .task-info {
+  padding: 0 2px 38px;
+}
+
+.generation-view .task-card.status-succeeded .task-info p {
+  bottom: 14px;
+  left: 12px;
+}
+
+.generation-view .task-card.status-succeeded .task-actions {
+  right: 10px;
+  bottom: 9px;
+}
+
+@media (max-width: 360px) {
+  .view-chat .title-button strong {
+    max-width: 112px;
+  }
+
+  .view-chat .credit-badge svg {
+    display: none;
+  }
+
+  .view-chat .works-pill {
+    padding: 0 6px;
   }
 }
 
@@ -3709,6 +4035,176 @@ button:disabled {
   margin-bottom: 8px;
 }
 
+/* P0 fixes: use the full mobile viewport instead of forcing a 375px canvas. */
+.app-shell {
+  width: 100%;
+  max-width: 100vw;
+}
+
+.app-topbar {
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+}
+
+.app-topbar .topbar-actions {
+  display: grid;
+  min-width: 116px;
+  grid-template-columns: auto auto;
+  justify-content: end;
+}
+
+.detail-sound-toggle {
+  position: absolute;
+  z-index: 4;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(8px);
+}
+
+.detail-view .detail-use {
+  margin-top: 14px;
+}
+
+.message:has(.message-image) {
+  display: grid;
+  gap: 7px;
+  padding: 6px;
+}
+
+.message-image {
+  display: block;
+  width: min(150px, 46vw);
+  max-height: 210px;
+  border-radius: 7px;
+  object-fit: cover;
+}
+
+.message:has(.message-image) > span {
+  padding: 0 6px 5px;
+  font-size: 11px;
+}
+
+.topic-chip.creative {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.library-titlebar {
+  grid-template-columns: 1fr auto;
+}
+
+.library-titlebar .usage-detail {
+  display: inline-flex;
+  width: auto;
+  height: auto;
+  align-items: center;
+  border-radius: 999px;
+  padding: 7px 10px;
+}
+
+.record-video-caption {
+  bottom: calc(92px + env(safe-area-inset-bottom));
+}
+
+.record-video-view .video-player > .ai-content-page-mark {
+  right: 18px;
+  bottom: calc(126px + env(safe-area-inset-bottom));
+  min-height: 20px;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 7px;
+  background: rgba(0, 0, 0, 0.52);
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.record-video-publish {
+  position: fixed;
+  z-index: 75;
+  right: 18px;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  left: 18px;
+  min-height: 48px;
+  border: 0;
+  border-radius: 24px;
+  color: #fff;
+  background: #447cff;
+  font-weight: 700;
+}
+
+.balance-modal {
+  position: relative;
+  width: min(340px, calc(100vw - 32px));
+  border-radius: 18px;
+  padding: 24px 20px 20px;
+  color: #17213a;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(24, 52, 96, 0.25);
+}
+
+.balance-modal h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.balance-total {
+  display: block;
+  margin: 18px 0;
+  color: #447cff;
+  font-size: 38px;
+}
+
+.balance-total::after {
+  content: ' 分贝';
+  font-size: 13px;
+}
+
+.balance-modal dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.balance-modal dl > div {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid #edf1f6;
+  padding: 8px 0;
+}
+
+.balance-modal dt,
+.balance-modal dd,
+.balance-modal p {
+  margin: 0;
+  color: #70798a;
+  font-size: 12px;
+}
+
+.balance-detail-link {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 16px;
+  border: 0;
+  border-radius: 21px;
+  color: #fff;
+  background: #447cff;
+}
+
+@media (min-width: 760px) {
+  .app-shell {
+    width: min(100%, 430px);
+    max-width: 430px;
+  }
+}
+
 .crop-sheet .crop-header {
   position: sticky;
   z-index: 4;
@@ -3844,5 +4340,110 @@ button:disabled {
   .view-home .mode-tabs button,
   .view-chat .mode-tabs button {
     width: auto;
+  }
+}
+
+/* P1 final cascade guards: these must stay after the imported prototype overrides. */
+.view-chat .title-button strong {
+  max-width: 142px;
+  font-size: clamp(13px, 3.8vw, 15px);
+}
+
+.view-chat .app-topbar {
+  grid-template-columns: 32px minmax(108px, 1fr) auto;
+  gap: 4px;
+}
+
+.view-chat .app-topbar .topbar-actions {
+  min-width: 104px;
+  gap: 4px;
+}
+
+.generation-view .task-card {
+  width: min(238px, 72vw);
+  justify-self: start;
+}
+
+.generation-view .task-card:not(.status-succeeded) {
+  position: relative;
+  display: flex;
+  min-height: 300px;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  border-radius: 12px;
+  padding: 22px 18px;
+  color: #fff;
+  background: linear-gradient(145deg, #5d99ff, #73d8f4);
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  align-content: center;
+  gap: 8px;
+  border-radius: 0;
+  background: transparent;
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-info {
+  position: relative;
+  z-index: 2;
+  color: #fff;
+  text-align: center;
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-info strong,
+.generation-view .task-card:not(.status-succeeded) .task-info p {
+  color: #fff;
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-progress {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.generation-view .task-card:not(.status-succeeded) .task-progress span {
+  background: #fff;
+  box-shadow: none;
+}
+
+.generation-view .task-card.status-succeeded {
+  display: grid;
+  width: min(252px, 76vw);
+  height: auto;
+  min-height: 0;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 10px;
+}
+
+.generation-view .task-card.status-succeeded .task-thumb {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 9 / 13;
+  border-radius: 8px;
+}
+
+.generation-view .task-card.status-succeeded .task-info {
+  padding: 0 2px 38px;
+}
+
+.generation-view .task-card.status-succeeded .task-info p {
+  bottom: 14px;
+  left: 12px;
+}
+
+.generation-view .task-card.status-succeeded .task-actions {
+  right: 10px;
+  bottom: 9px;
+}
+
+@media (max-width: 360px) {
+  .view-chat .title-button strong {
+    max-width: 112px;
   }
 }
