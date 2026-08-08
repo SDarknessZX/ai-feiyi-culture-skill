@@ -8,12 +8,13 @@ import {
   buildTaskIdRedirectUrl,
   cancelTokenTask,
   hasUsableTokenEntitlement,
+  mintCToken,
   reportInteraction,
   reportTokenResult,
   validatePublishMediaUrl,
 } from './miguAigc.js'
 
-test('uses the dedicated login key and signature key when minting cToken', async () => {
+test('uses the dedicated login key and signature key for key login', async () => {
   const originalFetch = globalThis.fetch
   const names = [
     'MIGU_AIGC_APP_ID',
@@ -41,17 +42,14 @@ test('uses the dedicated login key and signature key when minting cToken', async
   }
 
   try {
-    const redirect = new URL(await buildLoginRedirectUrl())
+    assert.equal(await mintCToken(), 'one-time-token')
     assert.equal(loginPayload.channelCode, 'channel-id')
     assert.equal(loginPayload.key, 'dedicated-login-key')
-    assert.equal(loginPayload.callBackUrl, 'https://example.com/callback')
+    assert.equal(Object.hasOwn(loginPayload, 'callBackUrl'), false)
     assert.equal(
       loginPayload.signature,
       crypto.createHash('md5').update(`channel-id${loginPayload.timestamp}dedicated-signature-key`).digest('hex'),
     )
-    assert.equal(redirect.searchParams.get('cToken'), 'one-time-token')
-    assert.equal(redirect.searchParams.get('schannel'), 'channel-id')
-    assert.equal(redirect.searchParams.get('cburl'), 'https://example.com/callback')
   } finally {
     globalThis.fetch = originalFetch
     for (const name of names) {
@@ -93,6 +91,7 @@ test('uses the login URL returned by the documented URL-login flow', async () =>
   try {
     assert.equal(await buildLoginRedirectUrl(), 'https://passport.migu.cn/login?ticket=one-time')
     assert.equal(loginPayload.callBackUrl, 'https://example.com/callback')
+    assert.equal(Object.hasOwn(loginPayload, 'key'), false)
     assert.equal(Object.hasOwn(loginPayload, 'loginType'), false)
   } finally {
     globalThis.fetch = originalFetch

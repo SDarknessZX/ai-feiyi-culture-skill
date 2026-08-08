@@ -151,7 +151,7 @@ export function encryptMiguMsisdn(plainText) {
 // Signature 规则：MD5(渠道号+时间戳+签名密钥) 拼接（不是冒号分隔，跟 Token 计费接口的签名规则不一样）
 async function requestChannelLogin({ callbackUrl = '' } = {}) {
   const { channelCode, signKey, loginKey, loginType } = getChannelLoginConfig()
-  if (!channelCode || !signKey || !loginKey) {
+  if (!channelCode || !signKey || (!callbackUrl && !loginKey)) {
     throw new Error(
       '渠道登录未配置完整（MIGU_CHANNEL_CODE / MIGU_CHANNEL_LOGIN_SIGN_KEY / MIGU_CHANNEL_LOGIN_KEY），请检查 .env。',
     )
@@ -162,7 +162,9 @@ async function requestChannelLogin({ callbackUrl = '' } = {}) {
     channelCode,
     timestamp,
     signature,
-    key: loginKey,
+    // 咪咕通过字段判断登录分支：key 登录必须同时提供 msisdn；
+    // URL 登录则只提供 callBackUrl，不能携带 key，否则会被判为手机号密钥登录。
+    ...(!callbackUrl ? { key: loginKey } : {}),
     ...(loginType ? { loginType } : {}),
     ...(callbackUrl ? { callBackUrl: callbackUrl } : {}),
   }
