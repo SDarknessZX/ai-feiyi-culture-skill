@@ -1172,21 +1172,11 @@ function App() {
     setShowMediaSourceSheet(true)
   }
 
-  async function confirmLogin() {
-    try {
-      // cToken 由服务端现调接口现取（免鉴权登录），前端不需要也不应该自己持有它
-      const response = await fetch('/api/migu/login-url')
-      const data = (await response.json()) as { url?: string; message?: string }
-      if (response.ok && data.url) {
-        // 整页跳转到咪咕登录验证页，登录完成后咪咕会带 btoken/vuid 跳回本页
-        window.sessionStorage.setItem(miguLoginPendingKey, '1')
-        window.location.href = data.url
-        return
-      }
-      setToast(data.message || '无法获取咪咕登录地址，请稍后重试')
-    } catch {
-      setToast('无法连接登录服务，请稍后重试')
-    }
+  function confirmLogin() {
+    // 点击动作内先进入同源后端，再由服务端 302 到咪咕，避免部分移动端 WebView
+    // 拦截 fetch 完成后的异步跨域导航。cToken 始终只存在于服务端生成的跳转地址中。
+    window.sessionStorage.setItem(miguLoginPendingKey, '1')
+    window.location.assign(`/api/migu/login-redirect?_=${Date.now()}`)
   }
 
   async function openUsageDetail() {

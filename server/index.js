@@ -346,6 +346,15 @@ app.get('/api/migu/login-url', async (request, response) => {
     response.status(400).json({ message: error instanceof Error ? error.message : '无法生成登录地址。' })
   }
 })
+app.get('/api/migu/login-redirect', async (_request, response) => {
+  response.set('Cache-Control', 'no-store')
+  try {
+    const url = await buildLoginRedirectUrl()
+    response.redirect(302, url)
+  } catch (error) {
+    response.status(400).send(error instanceof Error ? error.message : '无法跳转到咪咕登录。')
+  }
+})
 app.get('/api/migu/aigc-login-url', (request, response) => {
   const token = String(request.query.token || '').trim()
   if (!token || token.length > 2048) {
