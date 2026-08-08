@@ -23,6 +23,7 @@ test('uses the dedicated login key and signature key for key login', async () =>
     'MIGU_CALLBACK_URL',
     'MIGU_CHANNEL_LOGIN_SIGN_KEY',
     'MIGU_CHANNEL_LOGIN_KEY',
+    'MIGU_CHANNEL_LOGIN_MSISDN',
   ]
   const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
   Object.assign(process.env, {
@@ -32,6 +33,7 @@ test('uses the dedicated login key and signature key for key login', async () =>
     MIGU_CALLBACK_URL: 'https://example.com/callback',
     MIGU_CHANNEL_LOGIN_SIGN_KEY: 'dedicated-signature-key',
     MIGU_CHANNEL_LOGIN_KEY: 'dedicated-login-key',
+    MIGU_CHANNEL_LOGIN_MSISDN: '13800138000',
   })
 
   let loginPayload
@@ -45,6 +47,7 @@ test('uses the dedicated login key and signature key for key login', async () =>
     assert.equal(await mintCToken(), 'one-time-token')
     assert.equal(loginPayload.channelCode, 'channel-id')
     assert.equal(loginPayload.key, 'dedicated-login-key')
+    assert.equal(loginPayload.msisdn, '13800138000')
     assert.equal(Object.hasOwn(loginPayload, 'callBackUrl'), false)
     assert.equal(
       loginPayload.signature,
@@ -68,6 +71,7 @@ test('uses the login URL returned by the documented URL-login flow', async () =>
     'MIGU_CALLBACK_URL',
     'MIGU_CHANNEL_LOGIN_SIGN_KEY',
     'MIGU_CHANNEL_LOGIN_KEY',
+    'MIGU_CHANNEL_LOGIN_MSISDN',
     'MIGU_CHANNEL_LOGIN_TYPE',
   ]
   const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
@@ -80,6 +84,7 @@ test('uses the login URL returned by the documented URL-login flow', async () =>
     MIGU_CHANNEL_LOGIN_KEY: 'dedicated-login-key',
   })
   delete process.env.MIGU_CHANNEL_LOGIN_TYPE
+  delete process.env.MIGU_CHANNEL_LOGIN_MSISDN
 
   let loginPayload
   globalThis.fetch = async (requestUrl) => {
@@ -187,6 +192,7 @@ test('uses login callback publish parameters and omits optional values when abse
     callbackUrl: process.env.MIGU_CALLBACK_URL,
     signKey: process.env.MIGU_CHANNEL_LOGIN_SIGN_KEY,
     loginKey: process.env.MIGU_CHANNEL_LOGIN_KEY,
+    msisdn: process.env.MIGU_CHANNEL_LOGIN_MSISDN,
   }
   Object.assign(process.env, {
     MIGU_AIGC_APP_ID: 'ability-id',
@@ -195,6 +201,7 @@ test('uses login callback publish parameters and omits optional values when abse
     MIGU_CALLBACK_URL: 'https://example.com/callback',
     MIGU_CHANNEL_LOGIN_SIGN_KEY: 'sign-key',
     MIGU_CHANNEL_LOGIN_KEY: 'login-key',
+    MIGU_CHANNEL_LOGIN_MSISDN: '13800138000',
   })
   globalThis.fetch = async () => new Response(JSON.stringify({ token: 'one-time-token' }), { status: 200 })
 
@@ -224,6 +231,7 @@ test('uses login callback publish parameters and omits optional values when abse
       MIGU_CALLBACK_URL: previous.callbackUrl,
       MIGU_CHANNEL_LOGIN_SIGN_KEY: previous.signKey,
       MIGU_CHANNEL_LOGIN_KEY: previous.loginKey,
+      MIGU_CHANNEL_LOGIN_MSISDN: previous.msisdn,
     }
     for (const [key, value] of Object.entries(variables)) {
       if (value === undefined) delete process.env[key]

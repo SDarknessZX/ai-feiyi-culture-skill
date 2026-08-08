@@ -83,6 +83,7 @@ export function getMiguAigcConfigReport() {
     watermarkIdConfigured: Boolean(config.watermarkId),
     callbackUrlConfigured: Boolean(config.callbackUrl),
     channelLoginConfigured: isChannelLoginConfigured(),
+    channelLoginMsisdnConfigured: Boolean(getChannelLoginConfig().msisdn),
     tokenGatingEnabled: isTokenGatingEnabled(),
   }
 }
@@ -111,6 +112,7 @@ function getChannelLoginConfig() {
     channelCode: process.env.MIGU_CHANNEL_CODE?.trim() || '',
     signKey: process.env.MIGU_CHANNEL_LOGIN_SIGN_KEY?.trim() || appSecret,
     loginKey: process.env.MIGU_CHANNEL_LOGIN_KEY?.trim() || appSecret,
+    msisdn: process.env.MIGU_CHANNEL_LOGIN_MSISDN?.trim() || '',
     loginType: process.env.MIGU_CHANNEL_LOGIN_TYPE?.trim() || '',
     callbackUrl:
       process.env.MIGU_CHANNEL_LOGIN_CALLBACK_URL?.trim() || process.env.MIGU_CALLBACK_URL?.trim() || '',
@@ -149,12 +151,18 @@ export function encryptMiguMsisdn(plainText) {
 // 《数智人和AI视频彩铃包月》接口说明《登陆接口》——免鉴权模式：
 // 用 channelCode + 免鉴权登录秘钥 换一个一次性 token，这个 token 就是登录验证页面要用的 cToken。
 // Signature 规则：MD5(渠道号+时间戳+签名密钥) 拼接（不是冒号分隔，跟 Token 计费接口的签名规则不一样）
-async function requestChannelLogin({ callbackUrl = '' } = {}) {
+async function requestChannelLogin({ callbackUrl = '', msisdn = '' } = {}) {
   const { channelCode, signKey, loginKey, loginType } = getChannelLoginConfig()
-  if (!channelCode || !signKey || (!callbackUrl && !loginKey)) {
+  if (!channelCode || !signKey || (msisdn && !loginKey)) {
     throw new Error(
       '渠道登录未配置完整（MIGU_CHANNEL_CODE / MIGU_CHANNEL_LOGIN_SIGN_KEY / MIGU_CHANNEL_LOGIN_KEY），请检查 .env。',
     )
+  }
+  if (msisdn && !/^1\d{10}$/.test(msisdn)) {
+    throw new Error('MIGU_CHANNEL_LOGIN_MSISDN 必须是合法的 11 位手机号。')
+  }
+  if (!msisdn && !callbackUrl) {
+    throw new Error('渠道登录缺少手机号或登录回调地址。')
   }
   const timestamp = formatDateTimestamp(new Date())
   const signature = crypto.createHash('md5').update(`${channelCode}${timestamp}${signKey}`).digest('hex')
@@ -162,11 +170,9 @@ async function requestChannelLogin({ callbackUrl = '' } = {}) {
     channelCode,
     timestamp,
     signature,
-    // 咪咕通过字段判断登录分支：key 登录必须同时提供 msisdn；
-    // URL 登录则只提供 callBackUrl，不能携带 key，否则会被判为手机号密钥登录。
-    ...(!callbackUrl ? { key: loginKey } : {}),
+    ...(msisdn ? { key: loginKey, msisdn } : {}),
     ...(loginType ? { loginType } : {}),
-    ...(callbackUrl ? { callBackUrl: callbackUrl } : {}),
+    ...(!msisdn && callbackUrl ? { callBackUrl: callbackUrl } : {}),
   }
   const url = `${CHANNEL_LOGIN_BASE_URL}${CHANNEL_LOGIN_PATH}?data=${encodeURIComponent(JSON.stringify(payload))}`
 
@@ -182,7 +188,11 @@ async function requestChannelLogin({ callbackUrl = '' } = {}) {
 }
 
 export async function mintCToken() {
-  const data = await requestChannelLogin()
+  const { msisdn } = getChannelLoginConfig()
+  if (!msisdn) {
+    throw new Error('密钥登录缺少 MIGU_CHANNEL_LOGIN_MSISDN，无法获取 cToken。')
+  }
+  const data = await requestChannelLogin({ msisdn })
   if (!data.token) {
     throw new Error(data.resMsg || '渠道登录接口未返回 token（cToken）。')
   }
@@ -206,8 +216,8 @@ export function buildAigcLoginRedirectUrl(cToken) {
 // 登录验证页面：把浏览器整页跳转到这个地址，咪咕登录完成后会带 btoken/vuid 回调到 cburl
 export async function buildLoginRedirectUrl() {
   assertConfigured()
-  const { callbackUrl } = getChannelLoginConfig()
-  const data = await requestChannelLogin({ callbackUrl })
+  const { callbackUrl, msisdn } = getChannelLoginConfig()
+  const data = msisdn ? await requestChannelLogin({ msisdn }) : await requestChannelLogin({ callbackUrl })
   if (data.loginUrl) return data.loginUrl
   return buildAigcLoginRedirectUrl(data.token)
 }
