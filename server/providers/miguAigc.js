@@ -111,6 +111,9 @@ function getChannelLoginConfig() {
     channelCode: process.env.MIGU_CHANNEL_CODE?.trim() || '',
     signKey: process.env.MIGU_CHANNEL_LOGIN_SIGN_KEY?.trim() || appSecret,
     loginKey: process.env.MIGU_CHANNEL_LOGIN_KEY?.trim() || appSecret,
+    loginType: process.env.MIGU_CHANNEL_LOGIN_TYPE?.trim() || '',
+    callbackUrl:
+      process.env.MIGU_CHANNEL_LOGIN_CALLBACK_URL?.trim() || process.env.MIGU_CALLBACK_URL?.trim() || '',
   }
 }
 
@@ -146,8 +149,8 @@ export function encryptMiguMsisdn(plainText) {
 // 《数智人和AI视频彩铃包月》接口说明《登陆接口》——免鉴权模式：
 // 用 channelCode + 免鉴权登录秘钥 换一个一次性 token，这个 token 就是登录验证页面要用的 cToken。
 // Signature 规则：MD5(渠道号+时间戳+签名密钥) 拼接（不是冒号分隔，跟 Token 计费接口的签名规则不一样）
-export async function mintCToken() {
-  const { channelCode, signKey, loginKey } = getChannelLoginConfig()
+async function requestChannelLogin({ callbackUrl = '' } = {}) {
+  const { channelCode, signKey, loginKey, loginType } = getChannelLoginConfig()
   if (!channelCode || !signKey || !loginKey) {
     throw new Error(
       '渠道登录未配置完整（MIGU_CHANNEL_CODE / MIGU_CHANNEL_LOGIN_SIGN_KEY / MIGU_CHANNEL_LOGIN_KEY），请检查 .env。',
@@ -155,7 +158,14 @@ export async function mintCToken() {
   }
   const timestamp = formatDateTimestamp(new Date())
   const signature = crypto.createHash('md5').update(`${channelCode}${timestamp}${signKey}`).digest('hex')
-  const payload = { channelCode, timestamp, signature, key: loginKey }
+  const payload = {
+    channelCode,
+    timestamp,
+    signature,
+    key: loginKey,
+    ...(loginType ? { loginType } : {}),
+    ...(callbackUrl ? { callBackUrl: callbackUrl } : {}),
+  }
   const url = `${CHANNEL_LOGIN_BASE_URL}${CHANNEL_LOGIN_PATH}?data=${encodeURIComponent(JSON.stringify(payload))}`
 
   const response = await fetch(url)
@@ -163,16 +173,23 @@ export async function mintCToken() {
   if (!response.ok || !data) {
     throw new Error(`渠道登录接口请求失败：HTTP ${response.status}`)
   }
+  if (!data.token && !data.loginUrl) {
+    throw new Error(data.resMsg || '渠道登录接口未返回 token 或 loginUrl。')
+  }
+  return data
+}
+
+export async function mintCToken() {
+  const data = await requestChannelLogin()
   if (!data.token) {
     throw new Error(data.resMsg || '渠道登录接口未返回 token（cToken）。')
   }
   return data.token
 }
 
-// 登录验证页面：把浏览器整页跳转到这个地址，咪咕登录完成后会带 btoken/vuid 回调到 cburl
-export async function buildLoginRedirectUrl() {
+export function buildAigcLoginRedirectUrl(cToken) {
   assertConfigured()
-  const cToken = await mintCToken()
+  if (!cToken) throw new Error('缺少咪咕登录回调 token。')
   const config = getConfig()
   const params = new URLSearchParams({
     appId: config.appId,
@@ -182,6 +199,15 @@ export async function buildLoginRedirectUrl() {
   })
   if (config.projectId) params.set('projectId', config.projectId)
   return `${LOGIN_PAGE_BASE}?${params.toString()}`
+}
+
+// 登录验证页面：把浏览器整页跳转到这个地址，咪咕登录完成后会带 btoken/vuid 回调到 cburl
+export async function buildLoginRedirectUrl() {
+  assertConfigured()
+  const { callbackUrl } = getChannelLoginConfig()
+  const data = await requestChannelLogin({ callbackUrl })
+  if (data.loginUrl) return data.loginUrl
+  return buildAigcLoginRedirectUrl(data.token)
 }
 
 // 获取 taskId 页面：同样是整页跳转，咪咕会把 taskId（或 resumeCode/code）带回 cburl

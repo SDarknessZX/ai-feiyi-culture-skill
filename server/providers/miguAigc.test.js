@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import test from 'node:test'
 import {
+  buildAigcLoginRedirectUrl,
   buildLoginRedirectUrl,
   buildPublishRedirectUrl,
   buildTaskIdRedirectUrl,
@@ -43,6 +44,7 @@ test('uses the dedicated login key and signature key when minting cToken', async
     const redirect = new URL(await buildLoginRedirectUrl())
     assert.equal(loginPayload.channelCode, 'channel-id')
     assert.equal(loginPayload.key, 'dedicated-login-key')
+    assert.equal(loginPayload.callBackUrl, 'https://example.com/callback')
     assert.equal(
       loginPayload.signature,
       crypto.createHash('md5').update(`channel-id${loginPayload.timestamp}dedicated-signature-key`).digest('hex'),
@@ -52,6 +54,72 @@ test('uses the dedicated login key and signature key when minting cToken', async
     assert.equal(redirect.searchParams.get('cburl'), 'https://example.com/callback')
   } finally {
     globalThis.fetch = originalFetch
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]
+      else process.env[name] = previous[name]
+    }
+  }
+})
+
+test('uses the login URL returned by the documented URL-login flow', async () => {
+  const originalFetch = globalThis.fetch
+  const names = [
+    'MIGU_AIGC_APP_ID',
+    'MIGU_AIGC_APP_SECRET',
+    'MIGU_CHANNEL_CODE',
+    'MIGU_CALLBACK_URL',
+    'MIGU_CHANNEL_LOGIN_SIGN_KEY',
+    'MIGU_CHANNEL_LOGIN_KEY',
+    'MIGU_CHANNEL_LOGIN_TYPE',
+  ]
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'legacy-secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+    MIGU_CHANNEL_LOGIN_SIGN_KEY: 'dedicated-signature-key',
+    MIGU_CHANNEL_LOGIN_KEY: 'dedicated-login-key',
+  })
+  delete process.env.MIGU_CHANNEL_LOGIN_TYPE
+
+  let loginPayload
+  globalThis.fetch = async (requestUrl) => {
+    const request = new URL(String(requestUrl))
+    loginPayload = JSON.parse(request.searchParams.get('data'))
+    return new Response(JSON.stringify({ loginUrl: 'https://passport.migu.cn/login?ticket=one-time' }), { status: 200 })
+  }
+
+  try {
+    assert.equal(await buildLoginRedirectUrl(), 'https://passport.migu.cn/login?ticket=one-time')
+    assert.equal(loginPayload.callBackUrl, 'https://example.com/callback')
+    assert.equal(Object.hasOwn(loginPayload, 'loginType'), false)
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]
+      else process.env[name] = previous[name]
+    }
+  }
+})
+
+test('builds the AIGC bridge URL from the token returned to our callback', () => {
+  const names = ['MIGU_AIGC_APP_ID', 'MIGU_AIGC_APP_SECRET', 'MIGU_CHANNEL_CODE', 'MIGU_CALLBACK_URL', 'MIGU_PROJECT_ID']
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+    MIGU_PROJECT_ID: 'project-id',
+  })
+
+  try {
+    const result = new URL(buildAigcLoginRedirectUrl('callback-token'))
+    assert.equal(result.searchParams.get('cToken'), 'callback-token')
+    assert.equal(result.searchParams.get('cburl'), 'https://example.com/callback')
+    assert.equal(result.searchParams.get('projectId'), 'project-id')
+  } finally {
     for (const name of names) {
       if (previous[name] === undefined) delete process.env[name]
       else process.env[name] = previous[name]

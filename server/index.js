@@ -30,6 +30,7 @@ import {
   isAuditServiceUnavailable,
 } from './providers/contentAudit.js'
 import {
+  buildAigcLoginRedirectUrl,
   buildLoginRedirectUrl,
   buildPublishRedirectUrl,
   buildTaskIdRedirectUrl,
@@ -343,6 +344,17 @@ app.get('/api/migu/login-url', async (request, response) => {
     response.json({ url })
   } catch (error) {
     response.status(400).json({ message: error instanceof Error ? error.message : '无法生成登录地址。' })
+  }
+})
+app.get('/api/migu/aigc-login-url', (request, response) => {
+  const token = String(request.query.token || '').trim()
+  if (!token || token.length > 2048) {
+    return response.status(400).json({ message: '咪咕登录回调 token 缺失或格式不正确。' })
+  }
+  try {
+    response.json({ url: buildAigcLoginRedirectUrl(token) })
+  } catch (error) {
+    response.status(400).json({ message: error instanceof Error ? error.message : '无法继续咪咕登录。' })
   }
 })
 app.post('/api/migu/publish-url', async (request, response) => {

@@ -718,13 +718,48 @@ function App() {
     const search = new URLSearchParams(window.location.search)
     const btoken = search.get('btoken')
     const vuid = search.get('vuid')
+    const loginToken = search.get('token')
     const projectId = search.get('projectId')
     const releaseId = search.get('releaseId')
     const watermarkId = search.get('watermarkId')
     const otherSet = search.get('otherSet')
     const isMiniPublish = search.get('isMiniPublish')
     const loginWasPending = window.sessionStorage.getItem(miguLoginPendingKey) === '1'
-    if (!btoken && !vuid && !loginWasPending) return
+    if (!btoken && !vuid && !loginToken && !loginWasPending) return
+
+    // URL 登录先回传一次性 token；再交给 AIGC 登录页换取最终的 btoken/vuid。
+    if (loginToken && !btoken) {
+      search.delete('token')
+      const nextQuery = search.toString()
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`,
+      )
+      if (!loginWasPending) return
+
+      void (async () => {
+        try {
+          const response = await fetch(`/api/migu/aigc-login-url?token=${encodeURIComponent(loginToken)}`)
+          const data = (await response.json()) as { url?: string; message?: string }
+          if (response.ok && data.url) {
+            window.location.replace(data.url)
+            return
+          }
+          setToast(data.message || '无法继续咪咕登录，请重试')
+        } catch {
+          setToast('无法连接登录服务，请重试')
+        }
+        window.sessionStorage.removeItem(miguLoginPendingKey)
+        window.sessionStorage.removeItem(miguPendingLoginActionKey)
+        trackAmberLogin('fail')
+        trackQingyuanUserLogin('fail', {
+          isInMiguApp: miguEnv.isInMiguAPP,
+          isInMiniprogram: miguEnv.isInMiniprogram,
+        })
+      })()
+      return
+    }
 
     if (loginWasPending) {
       window.sessionStorage.removeItem(miguLoginPendingKey)
@@ -757,6 +792,7 @@ function App() {
 
     search.delete('btoken')
     search.delete('vuid')
+    search.delete('token')
     search.delete('projectId')
     search.delete('releaseId')
     search.delete('watermarkId')
