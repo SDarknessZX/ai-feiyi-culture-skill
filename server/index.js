@@ -869,6 +869,11 @@ app.post('/api/create/start', async (request, response) => {
 })
 
 app.get('/api/tasks/:taskId', async (request, response) => {
+  response.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+  })
   const mode = request.query.mode || 'costume'
   const { taskId } = request.params
 

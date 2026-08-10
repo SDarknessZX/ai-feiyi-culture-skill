@@ -660,6 +660,7 @@ function App() {
   const activeCreationContextRef = useRef<Partial<Record<ModeId, CreationContext>>>({})
   const creationStartingRef = useRef(false)
   const pollingTaskIdsRef = useRef(new Set<string>())
+  const pendingRefreshInFlightRef = useRef<Promise<void> | null>(null)
   // 咱们的 jobId -> 咪咕 taskId，创作完成事件上报要用，跨 pollTask 的多轮请求持续存在
   const miguTaskIdByJobRef = useRef<Record<string, string>>({})
 
@@ -1037,14 +1038,26 @@ function App() {
   useEffect(() => {
     if (resumeRef.current) return
     resumeRef.current = true
-    const pendingEntries = Object.entries(loadPendingTasks()) as [ModeId, CreateResult][]
-    for (const [pendingMode, task] of pendingEntries) {
-      if (!task?.taskId) {
-        clearPendingTask(pendingMode)
-        continue
-      }
-      updateDraft(pendingMode, { result: task })
-      void pollTask(task, pendingMode)
+    void refreshPendingTasks({ forceQuery: true })
+
+    const refreshWhenActive = () => {
+      if (document.visibilityState === 'visible') void refreshPendingTasks({ forceQuery: true })
+    }
+    const ensurePolling = () => {
+      if (document.visibilityState === 'visible') void refreshPendingTasks()
+    }
+    const timer = window.setInterval(ensurePolling, 15_000)
+    window.addEventListener('pageshow', refreshWhenActive)
+    window.addEventListener('focus', refreshWhenActive)
+    window.addEventListener('online', refreshWhenActive)
+    document.addEventListener('visibilitychange', refreshWhenActive)
+
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('pageshow', refreshWhenActive)
+      window.removeEventListener('focus', refreshWhenActive)
+      window.removeEventListener('online', refreshWhenActive)
+      document.removeEventListener('visibilitychange', refreshWhenActive)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1188,6 +1201,7 @@ function App() {
   function openLibrary() {
     if (view !== 'library') setLibraryReturnView(view)
     setView('library')
+    void refreshPendingTasks({ forceQuery: true })
   }
 
   function leaveLibrary() {
@@ -1946,7 +1960,10 @@ function App() {
 
         let data: CreateResult
         try {
-          const response = await fetch(`/api/tasks/${current.taskId}?mode=${targetMode}`)
+          const response = await fetch(
+            `/api/tasks/${encodeURIComponent(current.taskId || initial.taskId)}?mode=${encodeURIComponent(targetMode)}&_=${Date.now()}`,
+            { cache: 'no-store' },
+          )
           data = (await response.json()) as CreateResult
           consecutiveFailures = 0
         } catch {
@@ -2024,6 +2041,60 @@ function App() {
     } finally {
       pollingTaskIdsRef.current.delete(initial.taskId)
       updateDraft(targetMode, { polling: false })
+    }
+  }
+
+  async function refreshPendingTasks({ forceQuery = false }: { forceQuery?: boolean } = {}) {
+    if (pendingRefreshInFlightRef.current) return pendingRefreshInFlightRef.current
+
+    const operation = (async () => {
+      const pendingEntries = Object.entries(loadPendingTasks()) as [ModeId, CreateResult][]
+      await Promise.all(
+        pendingEntries.map(async ([pendingMode, storedTask]) => {
+          if (!storedTask?.taskId) {
+            clearPendingTask(pendingMode)
+            return
+          }
+
+          const taskId = storedTask.taskId
+          let current = storedTask
+          updateDraft(pendingMode, { result: current })
+
+          if (forceQuery) {
+            try {
+              const response = await fetch(
+                `/api/tasks/${encodeURIComponent(current.taskId || taskId)}?mode=${encodeURIComponent(pendingMode)}&_=${Date.now()}`,
+                { cache: 'no-store' },
+              )
+              const data = (await response.json()) as CreateResult
+              current = { ...current, ...data, mode: pendingMode }
+              updateDraft(pendingMode, { result: current })
+            } catch {
+              // 页面恢复时单次查询失败不清除任务，交给后续自动轮询继续处理。
+            }
+          }
+
+          if (current.status === 'succeeded') {
+            saveWork(current)
+            clearPendingTask(pendingMode)
+            return
+          }
+          if (current.status === 'failed') {
+            clearPendingTask(pendingMode)
+            return
+          }
+
+          savePendingTask(pendingMode, current)
+          void pollTask(current, pendingMode)
+        }),
+      )
+    })()
+
+    pendingRefreshInFlightRef.current = operation
+    try {
+      await operation
+    } finally {
+      if (pendingRefreshInFlightRef.current === operation) pendingRefreshInFlightRef.current = null
     }
   }
 
