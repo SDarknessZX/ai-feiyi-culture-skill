@@ -1792,6 +1792,20 @@ function App() {
       return
     }
 
+    let shouldUseTokenGating = tokenGatingEnabled
+    if (!temporarilyBypassMiguLogin) {
+      try {
+        const gatingResponse = await fetch('/api/migu/token-gating', { cache: 'no-store' })
+        if (!gatingResponse.ok) throw new Error(`HTTP ${gatingResponse.status}`)
+        const gatingData = (await gatingResponse.json()) as { enabled?: boolean }
+        shouldUseTokenGating = Boolean(gatingData.enabled)
+        if (shouldUseTokenGating !== tokenGatingEnabled) setTokenGatingEnabled(shouldUseTokenGating)
+      } catch {
+        setToast('创作服务状态确认失败，请稍后重试')
+        return
+      }
+    }
+
     const targetDraft = drafts[targetMode]
     const targetIsWaiting = targetDraft.busy || targetDraft.polling
 
@@ -1874,7 +1888,7 @@ function App() {
     })
 
     try {
-      if (tokenGatingEnabled && session?.btoken) {
+      if (shouldUseTokenGating && session?.btoken) {
         await beginTokenGatedCreation(targetMode, file, session.btoken, { ...overrides, gender: creationGender || undefined })
         // 成功时上面那步已经整页跳转离开了，走不到这里；只有失败/降级路径需要收尾复位
         updateDraft(targetMode, { busy: false })

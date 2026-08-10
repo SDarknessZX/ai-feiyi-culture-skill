@@ -430,6 +430,7 @@ app.get('/api/migu/usage-detail-url', (request, response) => {
   }
 })
 app.get('/api/migu/token-gating', (_request, response) => {
+  response.set('Cache-Control', 'no-store')
   response.json({ enabled: isTokenGatingEnabled() })
 })
 app.post('/api/migu/task-id-url', async (request, response) => {
