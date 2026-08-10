@@ -56,6 +56,7 @@ type CreateResult = {
   previewUrl?: string
   videoUrl?: string
   posterUrl?: string
+  inputImageUrl?: string
   createdAt?: number
 }
 
@@ -160,6 +161,7 @@ type ChatResultHistoryItem = {
 
 type CreationContext = {
   id: string
+  messageId: string
   createdAt: number
   file: File
   preview: string
@@ -1599,13 +1601,24 @@ function App() {
     if (selectedTemplate) void createFromTemplate(selectedTemplate)
   }
 
-  function openRegeneratePanel(targetMode: ModeId, context?: CreationContext) {
+  async function openRegeneratePanel(targetMode: ModeId, context?: CreationContext, fallbackImageUrl?: string) {
     if (context) {
       if (targetMode === 'costume' && context.templateId) setCostumeStyle(context.templateId)
       if (targetMode === 'food' && context.templateId) setFoodShowcase(context.templateId)
       if (targetMode === 'painting' && context.templateId) setPaintingStyle(context.templateId)
       if (context.gender) setGender(context.gender)
       updateDraft(targetMode, { file: context.file, preview: context.preview })
+    } else if (fallbackImageUrl) {
+      try {
+        const imageResponse = await fetch(fallbackImageUrl, { cache: 'force-cache' })
+        if (!imageResponse.ok) throw new Error(`HTTP ${imageResponse.status}`)
+        const imageBlob = await imageResponse.blob()
+        const extension = imageBlob.type.includes('png') ? 'png' : imageBlob.type.includes('webp') ? 'webp' : 'jpg'
+        const imageFile = new File([imageBlob], `regenerate.${extension}`, { type: imageBlob.type || 'image/jpeg' })
+        updateDraft(targetMode, { file: imageFile, preview: fallbackImageUrl })
+      } catch {
+        setToast('原始图片加载失败，请重新选择图片')
+      }
     }
     setMode(targetMode)
     setChatMode(targetMode)
@@ -1625,6 +1638,14 @@ function App() {
     return targetTemplates.find((item) => item.id === selectedId)?.title || modeLabels[targetMode]
   }
 
+  function updateCreationMessageImage(targetMode: ModeId, imageUrl: string) {
+    const messageId = activeCreationContextRef.current[targetMode]?.messageId
+    if (!messageId || !imageUrl) return
+    setChatMessages((current) =>
+      current.map((message) => (message.id === messageId ? { ...message, imageUrl } : message)),
+    )
+  }
+
   // 处理 /api/create 或 /api/create/start 的响应：两条路径完成后的收尾逻辑完全一样
   async function handleCreateApiResponse(targetMode: ModeId, response: Response) {
     let data: CreateResult
@@ -1639,6 +1660,7 @@ function App() {
     }
     const context = activeCreationContextRef.current[targetMode]
     data = { ...data, mode: targetMode, createdAt: context?.createdAt ? context.createdAt + 1 : Date.now() }
+    if (data.inputImageUrl) updateCreationMessageImage(targetMode, data.inputImageUrl)
     updateDraft(targetMode, { result: data })
     saveWork(data)
     setChatMode(targetMode)
@@ -1699,6 +1721,7 @@ function App() {
         })
         return
       }
+      updateCreationMessageImage(targetMode, prepared.imageUrl)
 
       const pending: PendingCreation = {
         mode: targetMode,
@@ -1865,10 +1888,12 @@ function App() {
     const templateTitle = overrides.templateTitle || templateTitleFor(targetMode)
     const creationTemplateId = overrides.templateId ?? templateIdFor(targetMode)
     const messagePreview = overrides.preview || targetDraft.preview
+    const messageId = `user-create-${stamp}`
     creationStartingRef.current = true
     setShowCreationPanel(false)
     activeCreationContextRef.current[targetMode] = {
       id: `creation-${stamp}`,
+      messageId,
       createdAt: stamp,
       file,
       preview: messagePreview,
@@ -1878,7 +1903,13 @@ function App() {
     }
     setChatMessages((current) => [
       ...current.filter((item) => !item.loading),
-      { id: `user-create-${stamp}`, role: 'user', text: getCreationPrompt(targetMode, creationTemplateId), createdAt: stamp },
+      {
+        id: messageId,
+        role: 'user',
+        text: getCreationPrompt(targetMode, creationTemplateId),
+        imageUrl: messagePreview || undefined,
+        createdAt: stamp,
+      },
     ])
     setChatMode(targetMode)
     setView('chat')
@@ -2094,8 +2125,16 @@ function App() {
           videoUrl={chatVideoUrl}
           topics={chatTopics}
           onCreativeBubble={handleBubbleClick}
-          onRegenerate={() => openRegeneratePanel(chatMode, activeCreationContextRef.current[chatMode])}
-          onRegenerateHistory={(item) => openRegeneratePanel(item.mode, item.context)}
+          onRegenerate={() => void openRegeneratePanel(chatMode, activeCreationContextRef.current[chatMode], chatResult?.inputImageUrl)}
+          onRegenerateHistory={(item) => void openRegeneratePanel(item.mode, item.context, item.result.inputImageUrl)}
+          onPublishHistory={(item) =>
+            void publishVideo(
+              item.result.videoUrl || item.result.previewUrl,
+              item.result.posterUrl,
+              item.result.taskId,
+              item.context?.templateId,
+            )
+          }
           onRefresh={() => {
             if (chatResult) void pollTask(chatResult, chatMode)
           }}
@@ -2708,6 +2747,7 @@ function ChatView({
   onCreativeBubble,
   onRegenerate,
   onRegenerateHistory,
+  onPublishHistory,
   onRefresh,
   onPublish,
   onTopic,
@@ -2723,6 +2763,7 @@ function ChatView({
   onCreativeBubble: (item: InspirationBubble) => void
   onRegenerate: () => void
   onRegenerateHistory: (item: ChatResultHistoryItem) => void
+  onPublishHistory: (item: ChatResultHistoryItem) => void
   onRefresh: () => void
   onPublish: () => void
   onTopic: (topic: (typeof chatTopics)[number]) => void | Promise<void>
@@ -2770,9 +2811,22 @@ function ChatView({
         {timeline.map((entry) => {
           if (entry.kind === 'message') {
             const message = entry.message
+            if (message.role === 'user') {
+              return (
+                <div key={message.id} className={`message-turn user-turn${message.loading ? ' loading' : ''}`}>
+                  {message.imageUrl && (
+                    <div className="message-source-image">
+                      <img src={message.imageUrl} alt="本次创作使用的原图" />
+                    </div>
+                  )}
+                  <div className="message user">
+                    <span>{message.text}</span>
+                  </div>
+                </div>
+              )
+            }
             return (
               <div key={message.id} className={`message ${message.role}${message.loading ? ' loading' : ''}`}>
-                {message.imageUrl && <img className="message-image" src={message.imageUrl} alt="本次创作图片" />}
                 <span>{message.text}</span>
               </div>
             )
@@ -2781,11 +2835,16 @@ function ChatView({
           return (
             <ChatTaskCard
               key={`${entry.current ? 'current' : 'history'}-${item.id}`}
-              mode={item.mode}
               result={item.result}
               videoUrl={entry.current ? videoUrl : item.result.videoUrl || item.result.previewUrl}
               onPlay={(item.result.videoUrl || item.result.previewUrl) ? () => openVideo(item) : undefined}
-              onPublish={entry.current ? onPublish : undefined}
+              onPublish={
+                item.result.status === 'succeeded'
+                  ? entry.current
+                    ? onPublish
+                    : () => onPublishHistory(item)
+                  : undefined
+              }
               onRegenerate={
                 item.result.status === 'succeeded'
                   ? entry.current
@@ -2839,7 +2898,6 @@ function ChatView({
 }
 
 function ChatTaskCard({
-  mode,
   result,
   videoUrl,
   onRegenerate,
@@ -2847,7 +2905,6 @@ function ChatTaskCard({
   onPublish,
   onPlay,
 }: {
-  mode: ModeId
   result: CreateResult
   videoUrl?: string
   onRegenerate?: () => void
@@ -2871,10 +2928,10 @@ function ChatTaskCard({
         </div>
       )}
       <div className="task-info">
-        <strong>{videoUrl ? result.templateTitle || modeLabels[mode] : result.status === 'failed' ? '生成失败' : 'AI非遗视频创作中...'}</strong>
+        <strong>{videoUrl ? '视频生成完成' : result.status === 'failed' ? '生成失败' : 'AI非遗视频创作中...'}</strong>
         {videoUrl ? (
           <>
-            <p>看一看，不喜欢可以再来一版</p>
+            <p className="task-success-hint">不满意了？点击「重新生成」试试新创意</p>
             {(onRegenerate || onPublish) && (
               <div className="task-actions">
                 {onRegenerate && (

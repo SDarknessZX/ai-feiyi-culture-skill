@@ -694,6 +694,7 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     status: 'queued',
     mode: input.mode,
     templateTitle: styleCheck.templateTitle,
+    inputImageUrl: imageUrl,
     message: '任务已受理，正在后台处理，请稍候。',
   })
 })
@@ -862,6 +863,7 @@ app.post('/api/create/start', async (request, response) => {
     status: 'queued',
     mode: input.mode,
     templateTitle,
+    inputImageUrl: input.imageUrl,
     message: '任务已受理，正在后台处理，请稍候。',
   })
 })

@@ -4470,3 +4470,92 @@ button:disabled {
     max-width: 112px;
   }
 }
+
+/* 对话流交付稿：原图和文案属于同一用户回合，结果卡按参考稿纵向排列。 */
+.message-turn {
+  display: grid;
+  width: 100%;
+  gap: 9px;
+}
+
+.message-turn.user-turn {
+  justify-items: end;
+}
+
+.message-source-image {
+  width: min(190px, 54vw);
+  overflow: hidden;
+  aspect-ratio: 1;
+  border-radius: 8px 8px 0 8px;
+  background: #e9eef6;
+}
+
+.message-source-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.message-turn .message.user {
+  width: fit-content;
+  max-width: 88%;
+  justify-self: end;
+}
+
+.generation-view .task-card.status-succeeded {
+  display: block;
+  width: min(238px, 72vw);
+  height: auto;
+  min-height: 0;
+  padding: 10px;
+  border-radius: 9px;
+  background: #eef0f3;
+}
+
+.generation-view .task-card.status-succeeded .task-thumb {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 9 / 13;
+  border-radius: 7px;
+}
+
+.generation-view .task-card.status-succeeded .task-info {
+  padding: 9px 2px 0;
+}
+
+.generation-view .task-card.status-succeeded .task-info strong {
+  display: block;
+  color: #303849;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 20px;
+}
+
+.generation-view .task-card.status-succeeded .task-info .task-success-hint {
+  position: static;
+  max-width: none;
+  margin: 3px 0 0;
+  color: #939aa8;
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.generation-view .task-card.status-succeeded .task-actions {
+  position: static;
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  gap: 8px;
+  margin: 9px 0 0;
+}
+
+.generation-view .task-card.status-succeeded .task-actions button {
+  width: auto;
+  min-width: 82px;
+  min-height: 28px;
+  justify-content: center;
+  padding: 0 11px;
+}
