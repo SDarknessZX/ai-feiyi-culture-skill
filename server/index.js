@@ -54,11 +54,14 @@ import { createVideoPosterBuffer } from './providers/videoPoster.js'
 import { getTosConfigReport, uploadFileToTos } from './providers/tosStorage.js'
 import { detectFaces, getFaceDetectionConfigReport } from './providers/faceDetection.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
+import { createCreationRateLimiter, getTrustProxyHops } from './middleware/createRateLimit.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const generatedVideosRoot = path.join(__dirname, '..', 'generated-videos')
 
 const app = express()
+const trustProxyHops = getTrustProxyHops()
+if (trustProxyHops > 0) app.set('trust proxy', trustProxyHops)
 const upload = multer({
   dest: path.join(__dirname, '..', 'uploads'),
   limits: {
@@ -181,23 +184,9 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
   }
 }
 
-// 简易限流：生成接口会消耗付费额度，默认每个 IP 每 10 分钟最多 20 次。
-const createRequestLog = new Map()
-function rateLimitCreate(request, response, next) {
-  const windowMs = 10 * 60 * 1000
-  const maxRequests = Number(process.env.CREATE_RATE_LIMIT || 20)
-  const now = Date.now()
-  const recent = (createRequestLog.get(request.ip) || []).filter((time) => now - time < windowMs)
-  if (recent.length >= maxRequests) {
-    return response.status(429).json({
-      status: 'failed',
-      message: '生成请求过于频繁，请稍后再试。',
-    })
-  }
-  recent.push(now)
-  createRequestLog.set(request.ip, recent)
-  next()
-}
+// 每个逻辑创作只在入口计数一次。Token 路径中的 /create/start 是 /create/prepare 的续接，
+// 不能再次计数，否则 20 次限额实际只允许 10 次创作。
+const rateLimitCreate = createCreationRateLimiter()
 
 // costume/painting 模式需要校验模板并取出生成提示词；food 模式没有模板，直接放行。
 // /api/create 和 /api/create/start 都要做这个校验，抽成公共函数避免逻辑漂移。
@@ -308,8 +297,21 @@ function getFallbackChatReply(message) {
   return '收到，这个想法挺适合放进灵感区。也可以上传一张图片，我来帮你生成非遗创意短片。'
 }
 
-app.use(cors(process.env.CORS_ORIGIN ? { origin: process.env.CORS_ORIGIN.split(',') } : undefined))
+const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+if (configuredCorsOrigins.length) app.use(cors({ origin: configuredCorsOrigins }))
+else if (process.env.NODE_ENV !== 'production') app.use(cors())
 app.use(express.json())
+app.use((_request, response, next) => {
+  response.set({
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
+  })
+  next()
+})
 app.use('/templates', express.static(path.join(__dirname, '..', 'public', 'templates')))
 app.use(
   '/generated-videos',
@@ -325,16 +327,39 @@ app.use(express.static(path.join(__dirname, '..', 'dist')))
 
 app.get('/api/health', (_request, response) => {
   const config = getProviderConfigReport()
-  response.json({
-    ok: true,
+  const compliance = getVideoComplianceConfigReport()
+  const faceDetection = getFaceDetectionConfigReport()
+  const tos = getTosConfigReport()
+  const contentAudit = getContentAuditConfigReport()
+  const miguAigc = getMiguAigcConfigReport()
+  const readinessIssues = []
+  if (process.env.NODE_ENV === 'production') {
+    if (config.provider !== 'ark' || !config.arkConfigured) readinessIssues.push('Ark 视频生成配置不完整')
+    if (!tos.configured) readinessIssues.push('TOS 持久化存储配置不完整')
+    if (!compliance.watermarkAssetConfigured) readinessIssues.push('AI 合规水印资源缺失')
+    if (!faceDetection.enabled) readinessIssues.push('人脸检测服务不可用')
+    if (!contentAudit.configured) readinessIssues.push('内容审核服务配置不完整')
+    if (
+      process.env.VITE_BYPASS_MIGU_LOGIN !== 'true' &&
+      (!miguAigc.configured || !miguAigc.channelLoginConfigured)
+    ) {
+      readinessIssues.push('咪咕登录配置不完整')
+    }
+    if (process.env.MIGU_TOKEN_GATING_ENABLED === 'true' && !miguAigc.tokenGatingEnabled) {
+      readinessIssues.push('咪咕 Token 网关已要求启用，但配置不完整')
+    }
+  }
+  response.status(readinessIssues.length ? 503 : 200).json({
+    ok: readinessIssues.length === 0,
     provider: config.provider,
+    readinessIssues,
     config: {
       ...config,
-      compliance: getVideoComplianceConfigReport(),
-      faceDetection: getFaceDetectionConfigReport(),
-      tos: getTosConfigReport(),
-      contentAudit: getContentAuditConfigReport(),
-      miguAigc: getMiguAigcConfigReport(),
+      compliance,
+      faceDetection,
+      tos,
+      contentAudit,
+      miguAigc,
     },
   })
 })
@@ -766,7 +791,7 @@ const createStartSchema = z.object({
   otoken: z.string().trim().min(1).max(256),
 })
 
-app.post('/api/create/start', rateLimitCreate, async (request, response) => {
+app.post('/api/create/start', async (request, response) => {
   const parsed = createStartSchema.safeParse(request.body)
   if (!parsed.success) {
     return response.status(400).json({ status: 'failed', message: '请求参数不正确。' })
@@ -799,6 +824,7 @@ app.post('/api/create/start', rateLimitCreate, async (request, response) => {
     updateMiguTokenTaskState(jobId, 'reduce_failed', message)
     return response.status(402).json({
       status: 'failed',
+      code: error?.code || 'TOKEN_PREDEDUCT_FAILED',
       mode: input.mode,
       message,
     })
@@ -913,6 +939,7 @@ app.get('/api/tasks/:taskId', async (request, response) => {
             ...(templateTitle ? { templateTitle } : {}),
           })
         }
+        updateJob(taskId, { status: 'failed', message: '生成结果未通过内容审核。' })
         await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
         return response.json({
           taskId,
@@ -948,19 +975,24 @@ app.get('/api/tasks/:taskId', async (request, response) => {
           )
         }
       }
+      updateJob(taskId, { status: 'succeeded', resultVideoUrl: data.videoUrl, message: data.message })
       await settleTokenOutcomeIfNeeded(taskId, 'success', { videoUrl: data.videoUrl })
     } else if (data.status === 'failed') {
+      updateJob(taskId, { status: 'failed', message: data.message })
       await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
     }
     return response.json({ ...data, taskId, mode, ...(templateTitle ? { templateTitle } : {}) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to query task.'
-    await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
-    return response.status(500).json({
+    // 查询 Ark、下载结果、机审或归档都可能短暂失败。此时模型任务并没有给出终态，
+    // 不能误上报 result=false，否则会提前关闭计费任务并造成下一次创作状态错乱。
+    console.error(`查询或处理任务暂时失败（taskId=${taskId}）：`, error)
+    return response.status(503).json({
       taskId,
-      status: 'failed',
+      status: 'running',
+      code: error?.code || 'TASK_STATUS_TEMPORARILY_UNAVAILABLE',
       mode,
-      message,
+      message: `任务仍在处理中，状态查询暂时失败，将自动重试。${message ? `（${message}）` : ''}`,
     })
   }
 })
@@ -986,8 +1018,12 @@ async function loadPosterSourceVideo(request, videoUrl) {
     return readFile(path.join(__dirname, '..', 'public', 'templates', fileName))
   }
 
-  if (!['http:', 'https:'].includes(url.protocol) || isBlockedPosterHost(url.hostname)) {
-    throw new Error('只支持公网视频地址生成封面。')
+  if (isSameOrigin) {
+    throw new Error('只支持本站已生成的视频或模板视频生成封面。')
+  }
+
+  if (!['http:', 'https:'].includes(url.protocol) || !isAllowedPosterHost(url.hostname)) {
+    throw new Error('只支持本站已归档的视频地址生成封面。')
   }
 
   const controller = new AbortController()
@@ -1011,12 +1047,14 @@ async function loadPosterSourceVideo(request, videoUrl) {
   }
 }
 
-function isBlockedPosterHost(hostname) {
-  const host = hostname.toLowerCase()
-  if (['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(host)) return true
-  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return true
-  const private172 = host.match(/^172\.(\d{1,2})\./)
-  return Boolean(private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31)
+function isAllowedPosterHost(hostname) {
+  const publicBaseUrl = process.env.TOS_PUBLIC_BASE_URL?.trim()
+  if (!publicBaseUrl) return false
+  try {
+    return hostname.toLowerCase() === new URL(publicBaseUrl).hostname.toLowerCase()
+  } catch {
+    return false
+  }
 }
 
 // 上传的临时文件用完即删，避免 uploads 目录无限增长。
@@ -1044,6 +1082,28 @@ app.use((error, request, response, _next) => {
 })
 
 const port = Number(process.env.PORT || process.env.API_PORT || 8790)
-app.listen(port, () => {
+const httpServer = app.listen(port, () => {
   console.log(`AI Yitu Zhenying API running at http://localhost:${port}`)
 })
+
+let shuttingDown = false
+async function shutdownGracefully(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`收到 ${signal}，停止接收新请求并收尾未结算的咪咕任务...`)
+  httpServer.close()
+
+  const settlements = []
+  for (const [jobId, job] of jobs) {
+    if (!job.miguTaskId || job.tokenSettlementStatus === 'settled') continue
+    const outcome = job.status === 'succeeded' ? 'success' : 'failure'
+    settlements.push(settleTokenOutcomeIfNeeded(jobId, outcome, { videoUrl: job.resultVideoUrl }))
+  }
+
+  const timeout = new Promise((resolve) => setTimeout(resolve, 10_000))
+  await Promise.race([Promise.allSettled(settlements), timeout])
+  process.exit(0)
+}
+
+process.once('SIGTERM', () => void shutdownGracefully('SIGTERM'))
+process.once('SIGINT', () => void shutdownGracefully('SIGINT'))

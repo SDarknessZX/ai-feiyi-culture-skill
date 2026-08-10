@@ -9,10 +9,41 @@ import {
   cancelTokenTask,
   hasUsableTokenEntitlement,
   mintCToken,
+  preDeductToken,
   reportInteraction,
   reportTokenResult,
   validatePublishMediaUrl,
 } from './miguAigc.js'
+
+test('preserves Migu business error codes for server and UI classification', async () => {
+  const originalFetch = globalThis.fetch
+  const names = ['MIGU_AIGC_APP_ID', 'MIGU_AIGC_APP_SECRET', 'MIGU_CHANNEL_CODE', 'MIGU_CALLBACK_URL']
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.test/callback',
+  })
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ code: '500013', info: '系统繁忙' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+
+  try {
+    await assert.rejects(
+      preDeductToken({ otoken: 'business-token', taskId: 'task-1', contentType: 'video', modelValue: 'model-1' }),
+      (error) => error.code === '500013' && /错误码 500013/.test(error.message),
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+})
 
 test('uses the dedicated login key and signature key for key login', async () => {
   const originalFetch = globalThis.fetch

@@ -173,6 +173,9 @@ export async function auditContent({ kind, content, contentId, description }) {
   }
 
   const waitForCallback = kind !== 'text' ? registerPendingAudit(dataId, config.timeoutMs) : null
+  // 回调等待和送审 HTTP 请求并行。若 HTTP 层卡住，等待器可能先超时；提前挂一个
+  // rejection handler，避免尚未执行到 return waitForCallback 时触发未处理 Promise rejection。
+  waitForCallback?.catch(() => {})
 
   let response
   try {
@@ -183,6 +186,7 @@ export async function auditContent({ kind, content, contentId, description }) {
         Authorization: buildAuthorization(config),
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(config.timeoutMs),
     })
   } catch (error) {
     const wrapped = new Error(`机审接口请求失败：${error instanceof Error ? error.message : String(error)}`)

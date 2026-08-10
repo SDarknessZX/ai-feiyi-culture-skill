@@ -13,6 +13,8 @@
     "test:compliance": "node --test server/providers/videoCompliance.test.js server/providers/contentAudit.test.js",
     "test:face-detect": "node --test server/providers/faceDetection.test.js",
     "test:migu": "node --test server/providers/miguAigc.test.js",
+    "test:rate-limit": "node --test server/middleware/createRateLimit.test.js",
+    "test:storage": "node --test server/providers/tosStorage.test.js",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

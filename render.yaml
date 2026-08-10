@@ -16,6 +16,8 @@ services:
         value: ark
       - key: CREATE_RATE_LIMIT
         value: 20
+      - key: TRUST_PROXY_HOPS
+        value: 1
       - key: ARK_BASE_URL
         value: https://ark.cn-beijing.volces.com/api/v3
       - key: ARK_VIDEO_MODEL
@@ -30,6 +32,8 @@ services:
         value: true
       - key: ARK_LLM_MODEL
         value: doubao-seed-2-0-mini-260428
+      - key: CORS_ORIGIN
+        sync: false
       - key: TOS_REGION
         value: cn-beijing
       - key: TOS_ENDPOINT
@@ -49,4 +53,62 @@ services:
       - key: TOS_BUCKET
         sync: false
       - key: TOS_PUBLIC_BASE_URL
+        sync: false
+      - key: MIGU_AIGC_APP_ID
+        sync: false
+      - key: MIGU_AIGC_APP_SECRET
+        sync: false
+      - key: MIGU_CHANNEL_CODE
+        sync: false
+      - key: MIGU_PROJECT_ID
+        sync: false
+      - key: MIGU_RELEASE_ID
+        sync: false
+      - key: MIGU_WATERMARK_ID
+        sync: false
+      - key: MIGU_CALLBACK_URL
+        sync: false
+      - key: MIGU_CHANNEL_LOGIN_SIGN_KEY
+        sync: false
+      - key: MIGU_CHANNEL_LOGIN_KEY
+        sync: false
+      - key: MIGU_CHANNEL_LOGIN_MSISDN
+        sync: false
+      - key: MIGU_CHANNEL_LOGIN_TYPE
+        sync: false
+      - key: MIGU_CHANNEL_LOGIN_CALLBACK_URL
+        sync: false
+      - key: MIGU_TOKEN_GATING_ENABLED
+        sync: false
+      - key: MIGU_API_TIMEOUT_MS
+        value: 20000
+      - key: MIGU_MODEL_VALUE_COSTUME
+        sync: false
+      - key: MIGU_MODEL_VALUE_FOOD
+        sync: false
+      - key: MIGU_MODEL_VALUE_PAINTING
+        sync: false
+      - key: AUDIT_API_BASE_URL
+        sync: false
+      - key: AUDIT_ACCOUNT
+        sync: false
+      - key: AUDIT_APP_KEY
+        sync: false
+      - key: AUDIT_CALLBACK_NAME
+        sync: false
+      - key: VITE_BYPASS_MIGU_LOGIN
+        value: false
+      - key: VITE_SERVICE_PROVIDER_NAME
+        sync: false
+      - key: VITE_PRIVACY_POLICY_URL
+        sync: false
+      - key: VITE_MIGU_AIGC_APP_ID
+        sync: false
+      - key: VITE_MIGU_PROJECT_ID
+        sync: false
+      - key: VITE_MIGU_CHANNEL_CODE
+        sync: false
+      - key: VITE_AMBER_ACCOUNT_ID
+        sync: false
+      - key: VITE_AMBER_UPLOAD_URL
         sync: false

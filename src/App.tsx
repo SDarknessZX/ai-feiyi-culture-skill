@@ -48,6 +48,7 @@ type UploadSource = 'camera' | 'gallery'
 
 type CreateResult = {
   taskId?: string
+  code?: string
   status: TaskStatus
   mode: ModeId
   message: string
@@ -128,6 +129,7 @@ type WorkItem = {
 type CreationRecord = {
   id: string
   taskId?: string
+  code?: string
   mode: ModeId
   status: TaskStatus
   title: string
@@ -595,6 +597,8 @@ function App() {
   const returnToCreationPanelRef = useRef(false)
   const publishRedirectingRef = useRef(false)
   const activeCreationContextRef = useRef<Partial<Record<ModeId, CreationContext>>>({})
+  const creationStartingRef = useRef(false)
+  const pollingTaskIdsRef = useRef(new Set<string>())
   // 咱们的 jobId -> 咪咕 taskId，创作完成事件上报要用，跨 pollTask 的多轮请求持续存在
   const miguTaskIdByJobRef = useRef<Record<string, string>>({})
 
@@ -611,7 +615,9 @@ function App() {
     return visibleTemplates.find((item) => item.id === selectedId) || visibleTemplates[0]
   }, [costumeStyle, foodShowcase, mode, paintingStyle, visibleTemplates])
   const { file, preview, busy } = drafts[mode]
-  const hasRunningTask = Object.values(drafts).some((draft) => draft.busy || draft.polling)
+  const hasRunningTask = Object.values(drafts).some(
+    (draft) => draft.busy || draft.polling || draft.result?.status === 'queued' || draft.result?.status === 'running',
+  )
   const chatResult = drafts[chatMode].result
   const chatVideoUrl = chatResult?.videoUrl || chatResult?.previewUrl
   const visibleBalance = tokenRemain?.availablePointsCount ?? tokenRemain?.experienceCount ?? (temporarilyBypassMiguLogin ? 430 : '--')
@@ -853,8 +859,32 @@ function App() {
       setToast(callbackInfo || '渠道校验失败，请联系咪咕确认渠道配置')
       return
     }
-    // code=200001 表示已有正在执行的任务，咪咕会同时返回该 taskId，应当继续使用而不是按 resumeCode=4 拒绝。
-    const taskIdSucceeded = Boolean(taskId) && (resumeCode === '3' || code === '200001')
+    // code=200001 返回的是上一项仍在执行/结算的 taskId，不是本次创作的新 taskId。
+    // 复用它再次预扣一定会失败，也会把本次素材错误绑定到旧任务，因此这里明确终止本次续接。
+    if (code === '200001') {
+      try {
+        const pending = pendingRaw ? (JSON.parse(pendingRaw) as PendingCreation) : null
+        if (pending) {
+          setMode(pending.mode)
+          setChatMode(pending.mode)
+          setView('chat')
+          updateDraft(pending.mode, {
+            busy: false,
+            result: {
+              status: 'failed',
+              code: 'MIGU_TASK_ALREADY_RUNNING',
+              mode: pending.mode,
+              message: callbackInfo || '上一项创作仍在执行或结算中，请稍后再发起。',
+            },
+          })
+        }
+      } catch {
+        // 待续接数据损坏时仅展示统一提示。
+      }
+      setToast(callbackInfo || '上一项创作仍在执行或结算中，请稍后再试')
+      return
+    }
+    const taskIdSucceeded = Boolean(taskId) && resumeCode === '3'
     if (!taskIdSucceeded) {
       if (resumeCode === '4') setToast(callbackInfo || '获取 taskId 失败，请重试')
       else if (taskIdWasPending) setToast(callbackInfo || '获取创作资格失败，请重试')
@@ -1662,7 +1692,7 @@ function App() {
       return
     }
 
-    if (targetIsWaiting || hasRunningTask) {
+    if (targetIsWaiting || hasRunningTask || creationStartingRef.current) {
       setToast('已有1项任务制作中，稍后再创作哦～可到我的作品页查看进度')
       return
     }
@@ -1705,6 +1735,7 @@ function App() {
     const templateTitle = overrides.templateTitle || templateTitleFor(targetMode)
     const creationTemplateId = overrides.templateId ?? templateIdFor(targetMode)
     const messagePreview = overrides.preview || targetDraft.preview
+    creationStartingRef.current = true
     setShowCreationPanel(false)
     activeCreationContextRef.current[targetMode] = {
       id: `creation-${stamp}`,
@@ -1725,18 +1756,24 @@ function App() {
       result: { status: 'queued', mode: targetMode, message: '创作请求已提交', templateTitle },
     })
 
-    if (tokenGatingEnabled && session?.btoken) {
-      await beginTokenGatedCreation(targetMode, file, session.btoken, { ...overrides, gender: creationGender || undefined })
-      // 成功时上面那步已经整页跳转离开了，走不到这里；只有失败/降级路径需要收尾复位
-      updateDraft(targetMode, { busy: false })
-      return
-    }
+    try {
+      if (tokenGatingEnabled && session?.btoken) {
+        await beginTokenGatedCreation(targetMode, file, session.btoken, { ...overrides, gender: creationGender || undefined })
+        // 成功时上面那步已经整页跳转离开了，走不到这里；只有失败/降级路径需要收尾复位
+        updateDraft(targetMode, { busy: false })
+        return
+      }
 
-    await submitLegacyCreate(targetMode, file, { ...overrides, gender: creationGender || undefined })
+      await submitLegacyCreate(targetMode, file, { ...overrides, gender: creationGender || undefined })
+    } finally {
+      creationStartingRef.current = false
+    }
   }
 
   async function pollTask(initial: CreateResult, targetMode: ModeId) {
     if (!initial.taskId) return
+    if (pollingTaskIdsRef.current.has(initial.taskId)) return
+    pollingTaskIdsRef.current.add(initial.taskId)
     updateDraft(targetMode, { polling: true })
     let current = initial
     let consecutiveFailures = 0
@@ -1823,6 +1860,7 @@ function App() {
         },
       })
     } finally {
+      pollingTaskIdsRef.current.delete(initial.taskId)
       updateDraft(targetMode, { polling: false })
     }
   }
@@ -1921,11 +1959,15 @@ function App() {
           messages={chatMessages}
           mode={chatMode}
           result={chatResult}
+          polling={drafts[chatMode].polling}
           videoUrl={chatVideoUrl}
           topics={chatTopics}
           onCreativeBubble={handleBubbleClick}
           onRegenerate={() => openRegeneratePanel(chatMode, activeCreationContextRef.current[chatMode])}
           onRegenerateHistory={(item) => openRegeneratePanel(item.mode, item.context)}
+          onRefresh={() => {
+            if (chatResult) void pollTask(chatResult, chatMode)
+          }}
           onPublish={() =>
             void publishVideo(chatVideoUrl, chatResult?.posterUrl, chatResult?.taskId, templateIdFor(chatMode))
           }
@@ -2529,11 +2571,13 @@ function ChatView({
   messages,
   mode,
   result,
+  polling,
   videoUrl,
   topics,
   onCreativeBubble,
   onRegenerate,
   onRegenerateHistory,
+  onRefresh,
   onPublish,
   onTopic,
   onUnlockHome,
@@ -2542,11 +2586,13 @@ function ChatView({
   messages: ChatMessage[]
   mode: ModeId
   result: CreateResult | null
+  polling: boolean
   videoUrl?: string
   topics: typeof chatTopics
   onCreativeBubble: (item: InspirationBubble) => void
   onRegenerate: () => void
   onRegenerateHistory: (item: ChatResultHistoryItem) => void
+  onRefresh: () => void
   onPublish: () => void
   onTopic: (topic: (typeof chatTopics)[number]) => void | Promise<void>
   onUnlockHome: () => void
@@ -2573,7 +2619,16 @@ function ChatView({
           />
         ))}
 
-        {result && <ChatTaskCard mode={mode} result={result} videoUrl={videoUrl} onPublish={onPublish} onRegenerate={onRegenerate} />}
+        {result && (
+          <ChatTaskCard
+            mode={mode}
+            result={result}
+            videoUrl={videoUrl}
+            onPublish={onPublish}
+            onRegenerate={onRegenerate}
+            onRefresh={!polling && result.taskId && ['queued', 'running'].includes(result.status) ? onRefresh : undefined}
+          />
+        )}
 
         {!result ? (
           <>
@@ -2615,12 +2670,14 @@ function ChatTaskCard({
   result,
   videoUrl,
   onRegenerate,
+  onRefresh,
   onPublish,
 }: {
   mode: ModeId
   result: CreateResult
   videoUrl?: string
   onRegenerate?: () => void
+  onRefresh?: () => void
   onPublish?: () => void
 }) {
   const taskProgress = getTaskProgress(result)
@@ -2659,13 +2716,21 @@ function ChatTaskCard({
             )}
           </>
         ) : result.status === 'failed' ? (
-          <p>{getChatFailureMessage(result.message)}</p>
+          <p>{getChatFailureMessage(result.message, result.code)}</p>
         ) : (
           <>
             <p className="task-wait-hint">正在生成你的专属创意视频，请稍候</p>
             <div className="task-progress" aria-label={`创作进度 ${taskProgress}%`}>
               <span style={{ width: `${taskProgress}%` }} />
             </div>
+            {onRefresh && (
+              <div className="task-actions">
+                <button type="button" onClick={onRefresh}>
+                  <RefreshCw size={14} />
+                  刷新状态
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -3134,7 +3199,7 @@ function CreationRecordCard({
           <div className="record-failed-state">
             <Film size={35} />
             <strong>生成失败</strong>
-            <span>{getRecordFailureMessage(record.message)}</span>
+            <span>{getRecordFailureMessage(record.message, record.code)}</span>
           </div>
         ) : (
           <div className="record-running-state">
@@ -4044,6 +4109,7 @@ function buildCreationRecords(works: WorkItem[], drafts: Record<ModeId, ModeDraf
       {
         id: `draft-${mode}`,
         taskId: result.taskId,
+        code: result.code,
         mode: mode as ModeId,
         status: result.status,
         title: result.templateTitle || modeLabels[mode as ModeId],
@@ -4080,24 +4146,51 @@ function isWithinRecentSixMonths(value: string, now = new Date()) {
   return createdAt >= cutoff
 }
 
-function getRecordFailureMessage(message: string) {
-  if (/审核|PolicyViolation|SensitiveContent|Copyright|违规|不适合/.test(message)) return '这个内容不适合展示哦'
-  if (/人数过多|火爆|500012|500013|500014|500015|500016|500017|500018|500019/.test(message)) {
-    return '使用人数过多，生成失败'
-  }
-  if (/朗读|音频|准确率|500101/.test(message)) return '朗读内容准确率低'
-  return '使用人数过多，生成失败'
+function getRecordFailureMessage(message: string, code?: string) {
+  return getFailureMessage(message, code, false)
 }
 
-function getChatFailureMessage(message: string) {
-  if (/审核|PolicyViolation|SensitiveContent|Copyright|违规|不适合|199999|500027|300103/.test(message)) {
+function getChatFailureMessage(message: string, code?: string) {
+  return getFailureMessage(message, code, true)
+}
+
+function getFailureMessage(message: string, code: string | undefined, detailed: boolean) {
+  const combined = `${code || ''} ${message || ''}`.trim()
+
+  if (/CREATE_RATE_LIMITED|请求过于频繁|生成请求过于频繁/.test(combined)) {
+    return detailed ? '操作太频繁，请按提示稍后重试' : '操作太频繁，生成失败'
+  }
+  if (/MIGU_TASK_ALREADY_RUNNING|200001|仍在执行|仍在结算|已有正在执行/.test(combined)) {
+    return '上一项创作仍在执行或结算中，请稍后再试'
+  }
+  // 审核服务故障不是内容违规，必须先于“审核/机审”关键词判断。
+  if (/199999|TASK_STATUS_TEMPORARILY_UNAVAILABLE|审核服务.*(不可用|失败|异常|超时)|机审.*(不可用|失败|异常|超时)/.test(combined)) {
+    return '服务暂时不可用，系统会继续处理，请稍后刷新状态'
+  }
+  if (/PolicyViolation|SensitiveContent|Copyright|违规|不适合|未通过.*审核|审核未通过|500027|300103/.test(combined)) {
     return '这个内容不适合展示哦'
   }
-  if (/朗读|音频|准确率|500101/.test(message)) return '朗读内容准确率低，请重新录制后重试'
-  if (/500012|500013|500014|500015|500016|500017|500018|500019|500002|500003|500004|500005|500007|500020|500021|500028/.test(message)) {
-    return '功能过于火爆，可尝试重新生成'
+  if (/朗读|音频|准确率|500101/.test(combined)) {
+    return detailed ? '朗读内容准确率低，请重新录制后重试' : '朗读内容准确率低'
   }
-  return '功能过于火爆，稍后再来，给您留座哦！'
+  if (/500012|500013|500014|500015|500016|500017|500018|500019|500002|500003|500004|500005|500007|500020|500021|500028|人数过多|功能过于火爆/.test(combined)) {
+    return detailed ? '生成服务当前繁忙，可稍后重新生成' : '生成服务繁忙，生成失败'
+  }
+  if (/权益|Token|预扣|扣减|余额|402|TOKEN_PREDEDUCT_FAILED/.test(combined)) {
+    return '创作权益校验未通过，请确认权益后重试'
+  }
+  if (/API_KEY|\.env|未配置|配置异常/.test(combined)) {
+    return '生成服务配置异常，请联系工作人员'
+  }
+  if (/无法连接|网络|HTTP 5\d\d|fetch|timeout|超时/i.test(combined)) {
+    return '生成服务连接异常，请稍后重试'
+  }
+
+  const cleaned = String(message || '')
+    .replace(/https?:\/\/\S+/g, '上游服务')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+  return cleaned ? cleaned.slice(0, 120) : '生成失败，请稍后重试'
 }
 
 function getCreationPrompt(mode: ModeId, templateId?: string) {

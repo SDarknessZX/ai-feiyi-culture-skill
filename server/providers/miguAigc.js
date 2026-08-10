@@ -6,6 +6,7 @@ const LOGIN_PAGE_BASE = 'https://y.migu.cn/app/v5/p/middle/ai-channel-token/inde
 const TASK_ID_PAGE_BASE = 'https://y.migu.cn/app/v5/p/middle/ai-channel-task-id/index.html'
 const PUBLISH_PAGE_BASE = 'https://y.migu.cn/app/v5/p/publish-mid/index.html'
 const USAGE_DETAIL_PAGE_BASE = 'https://h5.nf.migu.cn/app/v4/n/ai/use-detail/index.html'
+const defaultApiTimeoutMs = 20_000
 // Token 计费服务端接口地址：文档给的是 IP+端口，没有域名。
 // 测试环境端口是 31011，线网环境端口是 31010 —— 这里默认线网，测试环境请用 MIGU_TOKEN_API_BASE_URL 覆盖成 :31011
 const API_BASE_URL = (process.env.MIGU_TOKEN_API_BASE_URL?.trim() || 'http://218.200.229.108:31010').replace(/\/$/, '')
@@ -49,6 +50,11 @@ function getConfig() {
     watermarkId: process.env.MIGU_WATERMARK_ID?.trim() || '',
     callbackUrl: process.env.MIGU_CALLBACK_URL?.trim() || '',
   }
+}
+
+function getApiTimeoutMs() {
+  const parsed = Number(process.env.MIGU_API_TIMEOUT_MS)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultApiTimeoutMs
 }
 
 export function isMiguAigcConfigured() {
@@ -176,7 +182,7 @@ async function requestChannelLogin({ callbackUrl = '', msisdn = '' } = {}) {
   }
   const url = `${CHANNEL_LOGIN_BASE_URL}${CHANNEL_LOGIN_PATH}?data=${encodeURIComponent(JSON.stringify(payload))}`
 
-  const response = await fetch(url)
+  const response = await fetch(url, { signal: AbortSignal.timeout(getApiTimeoutMs()) })
   const data = await response.json().catch(() => null)
   if (!response.ok || !data) {
     throw new Error(`渠道登录接口请求失败：HTTP ${response.status}`)
@@ -329,17 +335,35 @@ async function callSignedApi(path, otoken, body) {
   if (!otoken) {
     throw new Error('缺少业务 token（btoken/otoken），请先完成登录。')
   }
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers: buildSignedHeaders(otoken),
-    body: JSON.stringify(body),
-  })
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: buildSignedHeaders(otoken),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(getApiTimeoutMs()),
+    })
+  } catch (cause) {
+    const timedOut = cause?.name === 'TimeoutError' || cause?.name === 'AbortError'
+    const error = new Error(timedOut ? '咪咕接口请求超时，请稍后重试。' : '无法连接咪咕接口，请稍后重试。')
+    error.code = timedOut ? 'MIGU_TIMEOUT' : 'MIGU_NETWORK_ERROR'
+    throw error
+  }
   const payload = await response.json().catch(() => null)
   if (!response.ok || !payload) {
-    throw new Error(`咪咕接口请求失败：HTTP ${response.status}`)
+    const code = payload?.code ? String(payload.code) : ''
+    const detail = payload?.info || payload?.message || response.statusText || '响应异常'
+    const error = new Error(`咪咕接口请求失败：${detail}${code ? `（错误码 ${code}）` : ''}，HTTP ${response.status}`)
+    error.code = code || 'MIGU_HTTP_ERROR'
+    error.httpStatus = response.status
+    throw error
   }
   if (payload.code && payload.code !== '000000') {
-    throw new Error(payload.info || `咪咕接口返回错误码 ${payload.code}`)
+    const code = String(payload.code)
+    const error = new Error(`${payload.info || '咪咕接口返回失败'}（错误码 ${code}）`)
+    error.code = code
+    error.httpStatus = response.status
+    throw error
   }
   return payload.data ?? payload
 }

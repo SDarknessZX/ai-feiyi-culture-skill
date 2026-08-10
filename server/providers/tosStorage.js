@@ -1,6 +1,5 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
-import path from 'node:path'
 
 const requiredKeys = [
   'TOS_ACCESS_KEY_ID',
@@ -24,10 +23,13 @@ export function getTosConfigReport() {
 }
 
 export async function uploadFileToTos(file) {
-  const extension = path.extname(file.originalname || '') || guessExtension(file.mimetype)
-  const objectKey = `uploads/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}${extension}`
   const body = await fs.readFile(file.path)
-  return uploadBufferToTos(body, objectKey, file.mimetype || 'application/octet-stream')
+  const detected = detectImageType(body)
+  if (!detected) {
+    throw new Error('上传内容不是受支持的 JPG、PNG、WebP 或 GIF 图片。')
+  }
+  const objectKey = `uploads/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}${detected.extension}`
+  return uploadBufferToTos(body, objectKey, detected.contentType)
 }
 
 export async function uploadBufferToTos(body, objectKey, contentType) {
@@ -111,10 +113,21 @@ function getTosEndpoint() {
   return `tos-${region}.volces.com`
 }
 
-function guessExtension(mimetype = '') {
-  if (mimetype === 'image/png') return '.png'
-  if (mimetype === 'image/webp') return '.webp'
-  return '.jpg'
+export function detectImageType(body) {
+  if (!Buffer.isBuffer(body) || body.length < 12) return null
+  if (body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff) {
+    return { extension: '.jpg', contentType: 'image/jpeg' }
+  }
+  if (body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return { extension: '.png', contentType: 'image/png' }
+  }
+  if (body.subarray(0, 4).toString('ascii') === 'RIFF' && body.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return { extension: '.webp', contentType: 'image/webp' }
+  }
+  if (['GIF87a', 'GIF89a'].includes(body.subarray(0, 6).toString('ascii'))) {
+    return { extension: '.gif', contentType: 'image/gif' }
+  }
+  return null
 }
 
 function sha256(value) {

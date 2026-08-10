@@ -58,6 +58,42 @@ test('handles an audit service business error without an unhandled rejection', a
   }
 })
 
+test('times out a stalled audit HTTP request without leaking a rejected callback waiter', async () => {
+  const previous = {
+    baseUrl: process.env.AUDIT_API_BASE_URL,
+    account: process.env.AUDIT_ACCOUNT,
+    appKey: process.env.AUDIT_APP_KEY,
+    timeout: process.env.AUDIT_TIMEOUT_MS,
+    fetch: globalThis.fetch,
+  }
+  process.env.AUDIT_API_BASE_URL = 'https://audit.example.test'
+  process.env.AUDIT_ACCOUNT = 'test-account'
+  process.env.AUDIT_APP_KEY = '1234567890abcdef'
+  process.env.AUDIT_TIMEOUT_MS = '20'
+  globalThis.fetch = async (_url, options) =>
+    new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+    })
+
+  try {
+    const result = await checkContent({
+      kind: 'picture',
+      content: 'https://example.test/input.jpg',
+      contentId: 'audit-timeout-test',
+      description: 'audit timeout regression test',
+    })
+    assert.equal(result.passed, false)
+    assert.equal(isAuditServiceUnavailable(result), true)
+    await new Promise((resolve) => setImmediate(resolve))
+  } finally {
+    restoreEnv('AUDIT_API_BASE_URL', previous.baseUrl)
+    restoreEnv('AUDIT_ACCOUNT', previous.account)
+    restoreEnv('AUDIT_APP_KEY', previous.appKey)
+    restoreEnv('AUDIT_TIMEOUT_MS', previous.timeout)
+    globalThis.fetch = previous.fetch
+  }
+})
+
 function restoreEnv(name, value) {
   if (value === undefined) delete process.env[name]
   else process.env[name] = value
