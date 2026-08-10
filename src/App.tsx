@@ -56,6 +56,7 @@ type CreateResult = {
   previewUrl?: string
   videoUrl?: string
   posterUrl?: string
+  createdAt?: number
 }
 
 type ModeDraft = {
@@ -146,6 +147,7 @@ type ChatMessage = {
   text: string
   imageUrl?: string
   loading?: boolean
+  createdAt: number
 }
 
 type ChatResultHistoryItem = {
@@ -153,10 +155,12 @@ type ChatResultHistoryItem = {
   mode: ModeId
   result: CreateResult
   context?: CreationContext
+  createdAt: number
 }
 
 type CreationContext = {
   id: string
+  createdAt: number
   file: File
   preview: string
   gender?: GenderId
@@ -185,6 +189,8 @@ type PendingLoginAction =
 
 const worksStorageKey = 'ai-yitu-zhenying-works'
 const pendingStorageKey = 'ai-yitu-zhenying-pending'
+const chatMessagesStorageKey = 'ai-yitu-zhenying-chat-messages-v1'
+const chatHistoryStorageKey = 'ai-yitu-zhenying-chat-history-v1'
 const usageAcceptedStorageKey = 'ai-yitu-zhenying-usage-accepted-202605'
 const mediaPermissionStorageKey = 'ai-yitu-zhenying-media-permission'
 const cameraPermissionStorageKey = 'ai-yitu-zhenying-camera-permission'
@@ -464,6 +470,57 @@ function loadPendingTasks(): Partial<Record<ModeId, CreateResult>> {
   }
 }
 
+function loadChatMessages(): ChatMessage[] {
+  try {
+    const raw = window.localStorage.getItem(chatMessagesStorageKey)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as Partial<ChatMessage>[]
+    if (!Array.isArray(parsed)) return []
+    const fallbackStamp = Date.now() - parsed.length
+    return parsed
+      .filter((item) => item && typeof item.id === 'string' && (item.role === 'user' || item.role === 'assistant') && typeof item.text === 'string')
+      .map((item, index) => ({
+        id: item.id!,
+        role: item.role!,
+        text: item.text!,
+        imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : undefined,
+        loading: Boolean(item.loading),
+        createdAt: Number.isFinite(item.createdAt) ? Number(item.createdAt) : fallbackStamp + index,
+      }))
+      .slice(-200)
+  } catch {
+    return []
+  }
+}
+
+function loadChatHistory(): ChatResultHistoryItem[] {
+  try {
+    const raw = window.localStorage.getItem(chatHistoryStorageKey)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as Partial<ChatResultHistoryItem>[]
+    if (!Array.isArray(parsed)) return []
+    const fallbackStamp = Date.now() - parsed.length
+    return parsed
+      .filter(
+        (item) =>
+          item &&
+          typeof item.id === 'string' &&
+          ['costume', 'food', 'painting'].includes(String(item.mode)) &&
+          item.result &&
+          typeof item.result === 'object',
+      )
+      .map((item, index) => ({
+        id: item.id!,
+        mode: item.mode!,
+        result: item.result as CreateResult,
+        createdAt: Number.isFinite(item.createdAt) ? Number(item.createdAt) : fallbackStamp + index,
+      }))
+      .slice(-100)
+  } catch {
+    return []
+  }
+}
+
 function savePendingTask(mode: ModeId, task: CreateResult) {
   const pending = loadPendingTasks()
   pending[mode] = task
@@ -552,6 +609,8 @@ function App() {
     return false
   })
   const [tokenGatingEnabled, setTokenGatingEnabled] = useState(false)
+  const [tokenGatingReady, setTokenGatingReady] = useState(temporarilyBypassMiguLogin)
+  const [tokenGatingLoadFailed, setTokenGatingLoadFailed] = useState(false)
   const [tokenRemain, setTokenRemain] = useState<TokenRemainInfo | null>(null)
   const [showInfo, setShowInfo] = useState(false)
   const [showBalanceDetail, setShowBalanceDetail] = useState(false)
@@ -579,8 +638,8 @@ function App() {
   const [faceReviewing, setFaceReviewing] = useState(false)
   const [cropRatio, setCropRatio] = useState<CropRatio>('9:16')
   const [toast, setToast] = useState('')
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
-  const [chatResultHistory, setChatResultHistory] = useState<ChatResultHistoryItem[]>([])
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(loadChatMessages)
+  const [chatResultHistory, setChatResultHistory] = useState<ChatResultHistoryItem[]>(loadChatHistory)
   const [drafts, setDrafts] = useState<Record<ModeId, ModeDraft>>(() => ({
     costume: createEmptyDraft(),
     food: createEmptyDraft(),
@@ -670,6 +729,37 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(worksStorageKey, JSON.stringify(works))
   }, [works])
+
+  useEffect(() => {
+    window.localStorage.setItem(chatMessagesStorageKey, JSON.stringify(chatMessages.filter((item) => !item.loading)))
+  }, [chatMessages])
+
+  useEffect(() => {
+    const serializableHistory = chatResultHistory.map(({ context: _context, ...item }) => item)
+    window.localStorage.setItem(chatHistoryStorageKey, JSON.stringify(serializableHistory))
+  }, [chatResultHistory])
+
+  useEffect(() => {
+    const terminalResults = Object.entries(drafts).flatMap(([draftMode, draft]) => {
+      const result = draft.result
+      if (!result || !['succeeded', 'failed'].includes(result.status)) return []
+      const context = activeCreationContextRef.current[draftMode as ModeId]
+      const id = result.taskId || context?.id || `${draftMode}-${result.createdAt || Date.now()}`
+      return [{
+        id,
+        mode: draftMode as ModeId,
+        result,
+        context,
+        createdAt: result.createdAt || context?.createdAt || Date.now(),
+      }]
+    })
+    if (!terminalResults.length) return
+    setChatResultHistory((current) => {
+      const existingIds = new Set(current.map((item) => item.id))
+      const additions = terminalResults.filter((item) => !existingIds.has(item.id))
+      return additions.length ? [...current, ...additions].slice(-100) : current
+    })
+  }, [drafts])
 
   useEffect(() => {
     const worksNeedingPosters = works.filter((item) => item.videoUrl && !item.posterUrl && item.taskId).slice(0, 4)
@@ -996,6 +1086,7 @@ function App() {
     // TEMP: 测试期间不启用依赖登录态的 Token 计费链路，创作会走原有直连接口。
     if (temporarilyBypassMiguLogin) {
       setTokenGatingEnabled(false)
+      setTokenGatingReady(true)
       return
     }
     let cancelled = false
@@ -1005,7 +1096,12 @@ function App() {
         const data = (await response.json()) as { enabled?: boolean }
         if (!cancelled) setTokenGatingEnabled(Boolean(data.enabled))
       } catch {
-        // 查询失败就当没开，创作走原来的直接创建流程
+        if (!cancelled) {
+          setTokenGatingLoadFailed(true)
+          setToast('创作服务初始化失败，请刷新页面重试')
+        }
+      } finally {
+        if (!cancelled) setTokenGatingReady(true)
       }
     })()
     return () => {
@@ -1027,7 +1123,11 @@ function App() {
     let cancelled = false
     void (async () => {
       try {
-        const response = await fetch(`/api/migu/token/remain?otoken=${encodeURIComponent(session.btoken)}&mode=${encodeURIComponent(mode)}`)
+        const response = await fetch('/api/migu/token/remain', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ otoken: session.btoken, mode }),
+        })
         if (!response.ok) return
         const data = (await response.json()) as TokenRemainInfo
         if (!cancelled) setTokenRemain(data)
@@ -1447,14 +1547,16 @@ function App() {
       reportChatInteraction(topic.prompt)
       setChatMessages((current) => [
         ...current.filter((item) => !item.loading),
-        { id: `user-topic-${stamp}`, role: 'user', text: topic.prompt },
-        { id: `assistant-topic-${stamp}`, role: 'assistant', text: topic.reply },
+        { id: `user-topic-${stamp}`, role: 'user', text: topic.prompt, createdAt: stamp },
+        { id: `assistant-topic-${stamp}`, role: 'assistant', text: topic.reply, createdAt: stamp + 1 },
       ])
       setView('chat')
       return
     }
     setChatMessages((current) =>
-      current.length ? current : [{ id: `assistant-${Date.now()}`, role: 'assistant', text: '想聊点什么？我在这里。' }],
+      current.length
+        ? current
+        : [{ id: `assistant-${Date.now()}`, role: 'assistant', text: '想聊点什么？我在这里。', createdAt: Date.now() }],
     )
     setView('chat')
   }
@@ -1535,7 +1637,8 @@ function App() {
         message: `服务返回了异常响应（HTTP ${response.status}），请稍后重试。`,
       }
     }
-    data = { ...data, mode: targetMode }
+    const context = activeCreationContextRef.current[targetMode]
+    data = { ...data, mode: targetMode, createdAt: context?.createdAt ? context.createdAt + 1 : Date.now() }
     updateDraft(targetMode, { result: data })
     saveWork(data)
     setChatMode(targetMode)
@@ -1606,9 +1709,11 @@ function App() {
       }
       window.sessionStorage.setItem(pendingCreationStorageKey, JSON.stringify(pending))
 
-      const taskIdUrlResponse = await fetch(
-        `/api/migu/task-id-url?btoken=${encodeURIComponent(btoken)}&mode=${encodeURIComponent(targetMode)}`,
-      )
+      const taskIdUrlResponse = await fetch('/api/migu/task-id-url', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ btoken, mode: targetMode }),
+      })
       const taskIdUrlData = (await taskIdUrlResponse.json()) as { url?: string; message?: string }
       if (!taskIdUrlResponse.ok || !taskIdUrlData.url) {
         window.sessionStorage.removeItem(pendingCreationStorageKey)
@@ -1682,6 +1787,11 @@ function App() {
   }
 
   async function createVideo(targetMode: ModeId = mode, overrides: CreationOverrides = {}) {
+    if (!tokenGatingReady || tokenGatingLoadFailed) {
+      setToast(tokenGatingLoadFailed ? '创作服务初始化失败，请刷新页面重试' : '创作服务正在初始化，请稍后再试')
+      return
+    }
+
     const targetDraft = drafts[targetMode]
     const targetIsWaiting = targetDraft.busy || targetDraft.polling
 
@@ -1727,7 +1837,13 @@ function App() {
       setChatResultHistory((current) => {
         const historyId = previousResult.taskId || previousContext?.id || `${targetMode}-${previousResult.status}-${previousResult.message}`
         if (current.some((item) => item.id === historyId)) return current
-        return [...current, { id: historyId, mode: targetMode, result: previousResult, context: previousContext }]
+        return [...current, {
+          id: historyId,
+          mode: targetMode,
+          result: previousResult,
+          context: previousContext,
+          createdAt: previousResult.createdAt || previousContext?.createdAt || Date.now(),
+        }]
       })
     }
 
@@ -1739,6 +1855,7 @@ function App() {
     setShowCreationPanel(false)
     activeCreationContextRef.current[targetMode] = {
       id: `creation-${stamp}`,
+      createdAt: stamp,
       file,
       preview: messagePreview,
       gender: creationGender || undefined,
@@ -1747,13 +1864,13 @@ function App() {
     }
     setChatMessages((current) => [
       ...current.filter((item) => !item.loading),
-      { id: `user-create-${stamp}`, role: 'user', text: getCreationPrompt(targetMode, creationTemplateId) },
+      { id: `user-create-${stamp}`, role: 'user', text: getCreationPrompt(targetMode, creationTemplateId), createdAt: stamp },
     ])
     setChatMode(targetMode)
     setView('chat')
     updateDraft(targetMode, {
       busy: true,
-      result: { status: 'queued', mode: targetMode, message: '创作请求已提交', templateTitle },
+      result: { status: 'queued', mode: targetMode, message: '创作请求已提交', templateTitle, createdAt: stamp + 1 },
     })
 
     try {
@@ -2598,37 +2715,78 @@ function ChatView({
   onUnlockHome: () => void
 }) {
   const creativeBubbles = inspirationBubbles.filter((item) => item.mode === mode)
+  const [playRecord, setPlayRecord] = useState<CreationRecord | null>(null)
+  const visibleHistory = history.filter(
+    (item) => item.result !== result && (!result?.taskId || item.result.taskId !== result.taskId),
+  )
+  const timeline = [
+    ...messages.map((message) => ({ kind: 'message' as const, createdAt: message.createdAt, message })),
+    ...visibleHistory.map((item) => ({ kind: 'result' as const, createdAt: item.createdAt, item, current: false })),
+    ...(result
+      ? [{
+          kind: 'result' as const,
+          createdAt: result.createdAt || Date.now(),
+          item: { id: result.taskId || `current-${mode}`, mode, result, createdAt: result.createdAt || Date.now() },
+          current: true,
+        }]
+      : []),
+  ].sort((left, right) => left.createdAt - right.createdAt)
+
+  function openVideo(item: ChatResultHistoryItem) {
+    const resultVideoUrl = item.result.videoUrl || item.result.previewUrl
+    if (!resultVideoUrl) return
+    setPlayRecord({
+      id: item.id,
+      taskId: item.result.taskId,
+      code: item.result.code,
+      mode: item.mode,
+      status: 'succeeded',
+      title: item.result.templateTitle || modeLabels[item.mode],
+      message: item.result.message,
+      videoUrl: resultVideoUrl,
+      posterUrl: item.result.posterUrl,
+      createdAt: new Date(item.createdAt).toISOString(),
+      source: 'draft',
+    })
+  }
 
   return (
     <section className={result ? 'chat-view generation-view' : 'chat-view'}>
       <div className="message-list">
-        {messages.map((message) => (
-          <div key={message.id} className={`message ${message.role}${message.loading ? ' loading' : ''}`}>
-            {message.imageUrl && <img className="message-image" src={message.imageUrl} alt="本次创作图片" />}
-            <span>{message.text}</span>
-          </div>
-        ))}
-
-        {history.map((item) => (
-          <ChatTaskCard
-            key={item.id}
-            mode={item.mode}
-            result={item.result}
-            videoUrl={item.result.videoUrl || item.result.previewUrl}
-            onRegenerate={item.result.status === 'succeeded' ? () => onRegenerateHistory(item) : undefined}
-          />
-        ))}
-
-        {result && (
-          <ChatTaskCard
-            mode={mode}
-            result={result}
-            videoUrl={videoUrl}
-            onPublish={onPublish}
-            onRegenerate={onRegenerate}
-            onRefresh={!polling && result.taskId && ['queued', 'running'].includes(result.status) ? onRefresh : undefined}
-          />
-        )}
+        {timeline.map((entry) => {
+          if (entry.kind === 'message') {
+            const message = entry.message
+            return (
+              <div key={message.id} className={`message ${message.role}${message.loading ? ' loading' : ''}`}>
+                {message.imageUrl && <img className="message-image" src={message.imageUrl} alt="本次创作图片" />}
+                <span>{message.text}</span>
+              </div>
+            )
+          }
+          const item = entry.item
+          return (
+            <ChatTaskCard
+              key={`${entry.current ? 'current' : 'history'}-${item.id}`}
+              mode={item.mode}
+              result={item.result}
+              videoUrl={entry.current ? videoUrl : item.result.videoUrl || item.result.previewUrl}
+              onPlay={(item.result.videoUrl || item.result.previewUrl) ? () => openVideo(item) : undefined}
+              onPublish={entry.current ? onPublish : undefined}
+              onRegenerate={
+                item.result.status === 'succeeded'
+                  ? entry.current
+                    ? onRegenerate
+                    : () => onRegenerateHistory(item)
+                  : undefined
+              }
+              onRefresh={
+                entry.current && !polling && item.result.taskId && ['queued', 'running'].includes(item.result.status)
+                  ? onRefresh
+                  : undefined
+              }
+            />
+          )
+        })}
 
         {!result ? (
           <>
@@ -2661,6 +2819,7 @@ function ChatView({
           点击解锁更多玩法
         </button>
       )}
+      {playRecord && <RecordVideoModal record={playRecord} onClose={() => setPlayRecord(null)} />}
     </section>
   )
 }
@@ -2672,6 +2831,7 @@ function ChatTaskCard({
   onRegenerate,
   onRefresh,
   onPublish,
+  onPlay,
 }: {
   mode: ModeId
   result: CreateResult
@@ -2679,20 +2839,23 @@ function ChatTaskCard({
   onRegenerate?: () => void
   onRefresh?: () => void
   onPublish?: () => void
+  onPlay?: () => void
 }) {
   const taskProgress = getTaskProgress(result)
   return (
     <article className={`task-card status-${videoUrl ? 'succeeded' : result.status}`}>
-      <div className="task-thumb">
-        {videoUrl ? (
-          <VideoPosterFrame src={videoUrl} poster={result.posterUrl || ''} showPageMark={false} />
-        ) : (
+      {videoUrl ? (
+        <button className="task-thumb task-video-button" type="button" onClick={onPlay} aria-label="播放生成的视频">
+          <VideoPosterFrame src={videoUrl} poster={result.posterUrl || ''} showPlay showPageMark={false} />
+        </button>
+      ) : (
+        <div className="task-thumb">
           <>
             {result.status === 'failed' ? <X size={24} /> : <Loader2 className="spin" size={30} />}
             <span>{result.status === 'failed' ? '失败' : `${taskProgress}%`}</span>
           </>
-        )}
-      </div>
+        </div>
+      )}
       <div className="task-info">
         <strong>{videoUrl ? result.templateTitle || modeLabels[mode] : result.status === 'failed' ? '生成失败' : 'AI非遗视频创作中...'}</strong>
         {videoUrl ? (
@@ -3253,7 +3416,7 @@ function RecordVideoModal({
 }: {
   record: CreationRecord
   onClose: () => void
-  onPublish: () => void
+  onPublish?: () => void
 }) {
   if (!record.videoUrl) return null
 
@@ -3267,9 +3430,11 @@ function RecordVideoModal({
         <strong>{record.title}</strong>
         <span>点击播放按钮开启声音</span>
       </div>
-      <button className="record-video-publish" type="button" onClick={onPublish}>
-        发布视频
-      </button>
+      {onPublish && (
+        <button className="record-video-publish" type="button" onClick={onPublish}>
+          发布视频
+        </button>
+      )}
     </div>
   )
 }
@@ -4221,7 +4386,7 @@ function formatFullTime(value: string) {
   })
 }
 
-function getTaskProgress(result: CreateResult) {
+function getTaskProgress(result: Pick<CreateResult, 'status' | 'message'>) {
   if (result.status === 'succeeded') return 100
   if (result.status === 'failed') return 100
   const message = result.message || ''

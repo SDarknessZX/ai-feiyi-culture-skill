@@ -975,6 +975,12 @@ button:disabled {
   text-align: center;
 }
 
+.task-video-button {
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
 .task-thumb span {
   padding: 0 8px;
   font-weight: 900;

@@ -432,9 +432,9 @@ app.get('/api/migu/usage-detail-url', (request, response) => {
 app.get('/api/migu/token-gating', (_request, response) => {
   response.json({ enabled: isTokenGatingEnabled() })
 })
-app.get('/api/migu/task-id-url', async (request, response) => {
-  const btoken = String(request.query.btoken || '').trim()
-  const mode = String(request.query.mode || '').trim()
+app.post('/api/migu/task-id-url', async (request, response) => {
+  const btoken = String(request.body?.btoken || '').trim()
+  const mode = String(request.body?.mode || '').trim()
   const modelValue = getModelValueForMode(mode)
   if (!btoken) {
     return response.status(401).json({ message: '缺少 btoken，请先完成登录。' })
@@ -451,12 +451,13 @@ app.get('/api/migu/task-id-url', async (request, response) => {
     const url = buildTaskIdRedirectUrl({ btoken, modelValue, contentType: 'video' })
     response.json({ url, tokenRemain })
   } catch (error) {
+    console.error(`[migu] task-id 权益预检失败（mode=${mode}, code=${error?.code || 'UNKNOWN'}）：`, error?.message || error)
     response.status(502).json({ message: error instanceof Error ? error.message : 'Token 权益查询失败，无法获取 taskId。' })
   }
 })
-app.get('/api/migu/token/remain', async (request, response) => {
-  const otoken = String(request.query.otoken || '').trim()
-  const mode = String(request.query.mode || '').trim()
+app.post('/api/migu/token/remain', async (request, response) => {
+  const otoken = String(request.body?.otoken || '').trim()
+  const mode = String(request.body?.mode || '').trim()
   const modelValue = getModelValueForMode(mode)
   if (!modelValue) {
     return response.status(400).json({ message: `不支持的玩法模态：${mode || '（空）'}` })
@@ -465,6 +466,7 @@ app.get('/api/migu/token/remain', async (request, response) => {
     const data = await queryTokenRemainCount({ otoken, modelValue })
     response.json(data)
   } catch (error) {
+    console.error(`[migu] Token 余量查询失败（mode=${mode}, code=${error?.code || 'UNKNOWN'}）：`, error?.message || error)
     response.status(502).json({ message: error instanceof Error ? error.message : 'Token 权益查询失败。' })
   }
 })
