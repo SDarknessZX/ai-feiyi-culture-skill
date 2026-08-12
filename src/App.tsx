@@ -2867,6 +2867,7 @@ function ChatView({
         }]
       : []),
   ].sort((left, right) => left.createdAt - right.createdAt)
+  const hasResultCards = timeline.some((entry) => entry.kind === 'result')
 
   function openVideo(item: ChatResultHistoryItem) {
     const resultVideoUrl = item.result.videoUrl || item.result.previewUrl
@@ -2887,7 +2888,7 @@ function ChatView({
   }
 
   return (
-    <section className={result ? 'chat-view generation-view' : 'chat-view'}>
+    <section className={hasResultCards ? 'chat-view generation-view' : 'chat-view'}>
       <div className="message-list">
         {timeline.map((entry) => {
           if (entry.kind === 'message') {
@@ -2942,7 +2943,7 @@ function ChatView({
           )
         })}
 
-        {!result ? (
+        {!hasResultCards ? (
           <>
             <div className="try-divider">试试新创意</div>
             {topics.map((topic) => (
@@ -2967,7 +2968,7 @@ function ChatView({
         )}
       </div>
 
-      {!result && (
+      {!hasResultCards && (
         <button className="unlock-home" type="button" onClick={onUnlockHome}>
           <Wand2 size={14} />
           点击解锁更多玩法
