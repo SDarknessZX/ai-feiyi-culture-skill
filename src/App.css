@@ -1778,15 +1778,19 @@ button:disabled {
   border-top: 1px solid #edf1f7;
 }
 
-.dialog-actions button {
+.dialog-actions button,
+.dialog-actions a {
+  display: grid;
+  place-items: center;
   min-height: 48px;
   border: 0;
   color: #1f66ee;
   background: #fff;
   font-weight: 800;
+  text-decoration: none;
 }
 
-.dialog-actions button:first-child {
+.dialog-actions > :first-child {
   border-right: 1px solid #edf1f7;
   color: #526176;
 }

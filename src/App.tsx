@@ -1318,11 +1318,10 @@ function App() {
     setShowMediaSourceSheet(true)
   }
 
-  function confirmLogin() {
-    // 点击动作内先进入同源后端，再由服务端 302 到咪咕，避免部分移动端 WebView
-    // 拦截 fetch 完成后的异步跨域导航。cToken 始终只存在于服务端生成的跳转地址中。
+  function prepareLoginRedirect() {
+    // 原生链接直接进入同源后端，再由服务端 302 到咪咕。相比 JS location.assign，
+    // 这条路径在微信 XWeb、鸿蒙 ArkWeb 以及旧版 iOS WebView 中更稳定。
     window.sessionStorage.setItem(miguLoginPendingKey, '1')
-    window.location.assign(`/api/migu/login-redirect?_=${Date.now()}`)
   }
 
   async function openUsageDetail() {
@@ -2289,7 +2288,7 @@ function App() {
           onViewOfficial={() => void openUsageDetail()}
         />
       )}
-      {!temporarilyBypassMiguLogin && showLoginDialog && <LoginDialog onCancel={closeLoginDialog} onConfirm={confirmLogin} />}
+      {!temporarilyBypassMiguLogin && showLoginDialog && <LoginDialog onCancel={closeLoginDialog} onConfirm={prepareLoginRedirect} />}
       {showUsageNotice && <UsageNoticeSheet onAccept={confirmUsageNotice} onClose={closeUsageNotice} />}
       {showMediaSourceSheet && (
         <MediaSourceSheet onCancel={closeMediaSourceSheet} onChoose={chooseMediaSource} />
@@ -2645,6 +2644,7 @@ function TemplateCarousel({
       >
         {displayItems.map((item, displayIndex) => {
           const selected = item.id === selectedId && (items.length <= 2 || displayIndex === selectedIndex + 1)
+          const shouldLoadVideo = items.length <= 2 || Math.abs(displayIndex - (selectedIndex + 1)) <= 1
           return (
             <article
               key={`${item.id}-${displayIndex}`}
@@ -2661,7 +2661,7 @@ function TemplateCarousel({
                   onOpenTemplate(item)
                 }}
               >
-                <TemplateMedia item={item} preferVideo />
+                <TemplateMedia item={item} preferVideo={shouldLoadVideo} />
               </button>
               <AiContentPageMark />
               <span>{modeLabels[mode]}</span>
@@ -3721,9 +3721,9 @@ function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
           <button type="button" onClick={onCancel}>
             暂不登录
           </button>
-          <button type="button" onClick={onConfirm}>
+          <a href="/api/migu/login-redirect" onClick={onConfirm}>
             登录并继续
-          </button>
+          </a>
         </div>
       </section>
     </div>
