@@ -2610,33 +2610,67 @@ function TemplateCarousel({
   onSelect: (id: string) => void
   onUseTemplate: (template: TemplateItem) => void
 }) {
-  const activeRef = useRef<HTMLElement | null>(null)
   const railRef = useRef<HTMLDivElement | null>(null)
+  const cardRefs = useRef(new Map<string, HTMLElement>())
+  const scrollFrameRef = useRef<number | null>(null)
+  const scrollSelectedIdRef = useRef('')
   const selectedIndex = Math.max(0, items.findIndex((item) => item.id === selectedId))
-  const displayItems = items.length > 2 ? [items[items.length - 1], ...items, items[0]] : items
+
+  function centerTemplate(id: string, behavior: ScrollBehavior = 'smooth') {
+    const rail = railRef.current
+    const card = cardRefs.current.get(id)
+    if (!rail || !card) return
+    rail.scrollTo({
+      left: card.offsetLeft - (rail.clientWidth - card.clientWidth) / 2,
+      behavior,
+    })
+  }
 
   useEffect(() => {
-    const rail = railRef.current
-    const active = activeRef.current
-    if (!rail || !active) return
-    rail.scrollLeft = active.offsetLeft - (rail.clientWidth - active.clientWidth) / 2
+    if (scrollSelectedIdRef.current === selectedId) {
+      scrollSelectedIdRef.current = ''
+      return
+    }
+    const frame = window.requestAnimationFrame(() => centerTemplate(selectedId, 'smooth'))
+    return () => window.cancelAnimationFrame(frame)
+    // centerTemplate only reads refs and deliberately follows externally selected templates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, selectedId])
 
   function step(delta: number) {
     if (!items.length) return
-    const next = items[(selectedIndex + delta + items.length) % items.length]
+    const next = items[clamp(selectedIndex + delta, 0, items.length - 1)]
+    if (!next || next.id === selectedId) return
     onSelect(next.id)
+    window.requestAnimationFrame(() => centerTemplate(next.id))
   }
 
-  useEffect(() => {
-    if (items.length <= 1 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') step(1)
-    }, 4200)
-    return () => window.clearInterval(timer)
-    // selectedId is intentionally included so each user selection gets a full preview interval.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, selectedId])
+  function syncSelectionToScroll() {
+    if (scrollFrameRef.current !== null) return
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      const rail = railRef.current
+      if (!rail) return
+      const railRect = rail.getBoundingClientRect()
+      const centerX = railRect.left + railRect.width / 2
+      let nearestId = ''
+      let nearestDistance = Number.POSITIVE_INFINITY
+      for (const item of items) {
+        const card = cardRefs.current.get(item.id)
+        if (!card) continue
+        const cardRect = card.getBoundingClientRect()
+        const distance = Math.abs(cardRect.left + cardRect.width / 2 - centerX)
+        if (distance < nearestDistance) {
+          nearestDistance = distance
+          nearestId = item.id
+        }
+      }
+      if (nearestId && nearestId !== selectedId) {
+        scrollSelectedIdRef.current = nearestId
+        onSelect(nearestId)
+      }
+    })
+  }
 
   return (
     <div className="template-carousel-shell">
@@ -2646,32 +2680,38 @@ function TemplateCarousel({
       <div
         className="template-rail"
         ref={railRef}
+        onScroll={syncSelectionToScroll}
         onWheel={(event) => {
           if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
           event.preventDefault()
           event.currentTarget.scrollLeft += event.deltaY
         }}
       >
-        {displayItems.map((item, displayIndex) => {
-          const selected = item.id === selectedId && (items.length <= 2 || displayIndex === selectedIndex + 1)
-          const shouldLoadVideo = items.length <= 2 || Math.abs(displayIndex - (selectedIndex + 1)) <= 1
+        {items.map((item) => {
+          const selected = item.id === selectedId
           return (
             <article
-              key={`${item.id}-${displayIndex}`}
-              ref={selected ? activeRef : undefined}
+              key={item.id}
+              ref={(node) => {
+                if (node) cardRefs.current.set(item.id, node)
+                else cardRefs.current.delete(item.id)
+              }}
               className={selected ? 'template-card selected' : 'template-card'}
-              onMouseEnter={() => onSelect(item.id)}
             >
               <button
                 className="template-preview-button"
                 type="button"
                 aria-label={`查看${item.title}模板详情`}
                 onClick={() => {
-                  onSelect(item.id)
+                  if (!selected) {
+                    onSelect(item.id)
+                    window.requestAnimationFrame(() => centerTemplate(item.id))
+                    return
+                  }
                   onOpenTemplate(item)
                 }}
               >
-                <TemplateMedia item={item} preferVideo={shouldLoadVideo} />
+                <TemplateMedia item={item} preferVideo={selected} />
               </button>
               <AiContentPageMark />
               <span>{modeLabels[mode]}</span>
@@ -2702,6 +2742,16 @@ function TemplateDetail({
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [isMuted, setIsMuted] = useState(true)
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !template.videoUrl) return
+    video.muted = true
+    video.load()
+    void video.play().catch(() => {
+      // Embedded browsers may still require the visible play button as a user gesture.
+    })
+  }, [template.videoUrl])
 
   function toggleVideo() {
     const video = videoRef.current
@@ -2743,8 +2793,11 @@ function TemplateDetail({
             src={template.videoUrl}
             poster={template.imageUrl}
             muted={isMuted}
+            autoPlay
+            loop
             playsInline
-            preload="metadata"
+            preload="auto"
+            onLoadedData={(event) => void event.currentTarget.play().catch(() => undefined)}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             onVolumeChange={(event) => setIsMuted(event.currentTarget.muted || event.currentTarget.volume === 0)}
@@ -2810,11 +2863,46 @@ function AiContentPageMark() {
 
 function TemplateMedia({ item, className = '', preferVideo = false }: { item: TemplateItem; className?: string; preferVideo?: boolean }) {
   if (preferVideo && item.videoUrl) {
-    return <video className={className} src={item.videoUrl} poster={item.imageUrl} muted autoPlay loop playsInline preload="metadata" />
+    return <AutoPlayTemplateVideo className={className} src={item.videoUrl} poster={item.imageUrl} />
   }
   if (item.imageUrl) return <img className={className} src={item.imageUrl} alt="" loading="lazy" decoding="async" />
   if (item.videoUrl) return <VideoPosterFrame src={item.videoUrl} className={className} />
   return <img className={className} src={fallbackTemplateImage} alt="" loading="lazy" decoding="async" />
+}
+
+function AutoPlayTemplateVideo({ src, poster, className = '' }: { src: string; poster: string; className?: string }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+
+  function startPlayback(video: HTMLVideoElement) {
+    video.muted = true
+    void video.play().catch(() => {
+      // Some embedded browsers disable autoplay. The selected card remains clickable
+      // and opens the dedicated playback page, where playback is a direct user action.
+    })
+  }
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    video.load()
+    startPlayback(video)
+  }, [src])
+
+  return (
+    <video
+      ref={videoRef}
+      className={className}
+      src={src}
+      poster={poster}
+      muted
+      autoPlay
+      loop
+      playsInline
+      preload="auto"
+      onLoadedData={(event) => startPlayback(event.currentTarget)}
+      onCanPlay={(event) => startPlayback(event.currentTarget)}
+    />
+  )
 }
 
 function ChatView({
