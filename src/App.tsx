@@ -3967,6 +3967,7 @@ function CropSheet({
     setIsExporting(true)
     setExportError('')
     try {
+      if (typeof image.decode === 'function') await image.decode()
       const stageBounds = stage.getBoundingClientRect()
       const frameBounds = frame.getBoundingClientRect()
       const imageAspect = image.naturalWidth / image.naturalHeight
@@ -3980,8 +3981,10 @@ function CropSheet({
       const frameLeft = frameBounds.left - stageBounds.left
       const frameTop = frameBounds.top - stageBounds.top
 
-      const outputWidth = 1080
-      const outputHeight = Math.max(1, Math.min(1920, Math.round(outputWidth * (frameBounds.height / frameBounds.width))))
+      // iOS Safari 在高分辨率照片 + 大画布时偶发导出全黑 JPEG。720p 足够作为
+      // 图生视频参考图，也显著降低 WebView 的 Canvas 内存压力。
+      const outputWidth = 720
+      const outputHeight = Math.max(1, Math.min(1280, Math.round(outputWidth * (frameBounds.height / frameBounds.width))))
       const canvas = document.createElement('canvas')
       canvas.width = outputWidth
       canvas.height = outputHeight
@@ -3999,6 +4002,10 @@ function CropSheet({
         renderedWidth * outputScaleX,
         renderedHeight * outputScaleY,
       )
+
+      if (!canvasHasVisiblePixels(context, outputWidth, outputHeight)) {
+        throw new Error('图片裁剪渲染异常，请重新选择原图后再试')
+      }
 
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
       if (!blob) throw new Error('裁剪图片生成失败')
@@ -4538,6 +4545,31 @@ function getTaskProgress(result: Pick<CreateResult, 'status' | 'message'>) {
   if (/上传|素材/.test(message)) return 28
   if (result.status === 'running') return 62
   return 18
+}
+
+function canvasHasVisiblePixels(context: CanvasRenderingContext2D, width: number, height: number) {
+  try {
+    const sampleSize = 32
+    const sampleCanvas = document.createElement('canvas')
+    sampleCanvas.width = sampleSize
+    sampleCanvas.height = sampleSize
+    const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true })
+    if (!sampleContext) return true
+    sampleContext.drawImage(context.canvas, 0, 0, width, height, 0, 0, sampleSize, sampleSize)
+    const pixels = sampleContext.getImageData(0, 0, sampleSize, sampleSize).data
+    let brightnessTotal = 0
+    let maximum = 0
+    for (let index = 0; index < pixels.length; index += 4) {
+      const brightness = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3
+      brightnessTotal += brightness
+      maximum = Math.max(maximum, brightness)
+    }
+    const average = brightnessTotal / (pixels.length / 4)
+    return average > 3 || maximum > 12
+  } catch {
+    // 取样检查不可用时交给服务端 ffmpeg 二次校验，不能误伤正常图片。
+    return true
+  }
 }
 
 function clamp(value: number, min: number, max: number) {

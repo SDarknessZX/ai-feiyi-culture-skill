@@ -53,6 +53,7 @@ import { createCompliantVideoBuffer, getVideoComplianceConfigReport } from './pr
 import { createVideoPosterBuffer } from './providers/videoPoster.js'
 import { getTosConfigReport, uploadFileToTos } from './providers/tosStorage.js'
 import { detectFaces, getFaceDetectionConfigReport } from './providers/faceDetection.js'
+import { assertImageHasVisibleContent } from './providers/imageValidation.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
 import { createCreationRateLimiter, getTrustProxyHops } from './middleware/createRateLimit.js'
 
@@ -110,6 +111,7 @@ const maxPosterSourceBytes = 60 * 1024 * 1024
 // 创建任务改为异步：/api/create 立刻返回 job id，重活在后台跑，
 // 避免公网隧道对长请求超时（serveo 等隧道等不到响应会回 502）。
 const jobs = new Map()
+const jobFinalizationPromises = new Map()
 const jobTtlMs = 3 * 60 * 60 * 1000
 
 function updateJob(jobId, patch) {
@@ -182,6 +184,58 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
       }
     }
   }
+}
+
+async function finalizeGeneratedVideo({ taskId, mode, templateTitle, generated }) {
+  const data = { ...generated }
+  const outputAudit = await checkContent({
+    kind: 'video',
+    content: data.videoUrl,
+    contentId: taskId,
+    description: `${mode} 生成结果视频`,
+  })
+  if (!outputAudit.passed) {
+    if (isAuditServiceUnavailable(outputAudit)) {
+      const error = new Error('视频已生成，正在等待内容审核服务恢复，请稍候。')
+      error.code = 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE'
+      throw error
+    }
+    data.status = 'failed'
+    data.videoUrl = ''
+    data.message = '生成结果未通过内容审核，请调整素材后重新生成。'
+    updateJob(taskId, { status: 'failed', message: data.message })
+    await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
+    return data
+  }
+
+  const compliantVideoBuffer = await createCompliantVideoBuffer({
+    sourceUrl: data.videoUrl,
+    taskId,
+  })
+  try {
+    const archived = await archiveGeneratedVideo({
+      taskId,
+      videoBuffer: compliantVideoBuffer,
+      mode: String(mode),
+      templateTitle: templateTitle || '',
+    })
+    data.videoUrl = archived.videoUrl
+    data.posterUrl = archived.posterUrl || ''
+  } catch (error) {
+    console.warn('归档视频到 TOS 失败，回退本地缓存：', error)
+    try {
+      const cached = await cacheGeneratedVideo(compliantVideoBuffer, taskId, generatedVideosRoot)
+      data.videoUrl = cached.videoUrl
+      data.posterUrl = cached.posterUrl || ''
+    } catch (cacheError) {
+      throw new Error(
+        `合规视频归档失败，未返回未标识的临时视频：${cacheError instanceof Error ? cacheError.message : String(cacheError)}`,
+      )
+    }
+  }
+  updateJob(taskId, { status: 'succeeded', resultVideoUrl: data.videoUrl, message: data.message })
+  await settleTokenOutcomeIfNeeded(taskId, 'success', { videoUrl: data.videoUrl })
+  return data
 }
 
 // 每个逻辑创作只在入口计数一次。Token 路径中的 /create/start 是 /create/prepare 的续接，
@@ -606,6 +660,18 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     return response.status(400).json({ status: 'failed', message: '请先上传一张图片。' })
   }
 
+  try {
+    await assertImageHasVisibleContent(request.file.path)
+  } catch (error) {
+    await cleanupUpload(request)
+    return response.status(422).json({
+      status: 'failed',
+      code: error?.code || 'INVALID_IMAGE_CONTENT',
+      mode: input.mode,
+      message: error instanceof Error ? error.message : '图片内容无法识别，请重新上传。',
+    })
+  }
+
   if (input.mode === 'costume') {
     try {
       const faceResult = await detectFaces(request.file)
@@ -712,6 +778,18 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
   const input = parsed.data
   if (!request.file) {
     return response.status(400).json({ status: 'failed', message: '请先上传一张图片。' })
+  }
+
+  try {
+    await assertImageHasVisibleContent(request.file.path)
+  } catch (error) {
+    await cleanupUpload(request)
+    return response.status(422).json({
+      status: 'failed',
+      code: error?.code || 'INVALID_IMAGE_CONTENT',
+      mode: input.mode,
+      message: error instanceof Error ? error.message : '图片内容无法识别，请重新上传。',
+    })
   }
 
   if (input.mode === 'costume') {
@@ -930,63 +1008,20 @@ app.get('/api/tasks/:taskId', async (request, response) => {
       arkTaskId = job.arkTaskId
     }
 
-    const data = await queryVideoGenerationTask(arkTaskId)
+    let data = await queryVideoGenerationTask(arkTaskId)
     if (data.status === 'succeeded' && data.videoUrl) {
-      // 机审：模型生成的视频过审后才允许展示给用户预览，未过审直接判定任务失败
-      const outputAudit = await checkContent({
-        kind: 'video',
-        content: data.videoUrl,
-        contentId: taskId,
-        description: `${mode} 生成结果视频`,
-      })
-      if (!outputAudit.passed) {
-        if (isAuditServiceUnavailable(outputAudit)) {
-          return response.status(503).json({
-            taskId,
-            status: 'running',
-            mode,
-            message: '视频已生成，正在等待内容审核服务恢复，请稍候。',
-            ...(templateTitle ? { templateTitle } : {}),
-          })
-        }
-        updateJob(taskId, { status: 'failed', message: '生成结果未通过内容审核。' })
-        await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
-        return response.json({
-          taskId,
-          status: 'failed',
-          mode,
-          message: '生成结果未通过内容审核，请调整素材后重新生成。',
-          ...(templateTitle ? { templateTitle } : {}),
-        })
+      // 同一任务可能被页面恢复、前台轮询等同时查询。机审、水印、归档必须只执行一次，
+      // 其余请求共享同一个 Promise，避免同一个火山结果被重复送审和重复落库展示。
+      let finalization = jobFinalizationPromises.get(taskId)
+      if (!finalization) {
+        finalization = finalizeGeneratedVideo({ taskId, mode, templateTitle, generated: data })
+        jobFinalizationPromises.set(taskId, finalization)
       }
-
-      const compliantVideoBuffer = await createCompliantVideoBuffer({
-        sourceUrl: data.videoUrl,
-        taskId,
-      })
       try {
-        const archived = await archiveGeneratedVideo({
-          taskId,
-          videoBuffer: compliantVideoBuffer,
-          mode: String(mode),
-          templateTitle: templateTitle || '',
-        })
-        data.videoUrl = archived.videoUrl
-        data.posterUrl = archived.posterUrl || ''
-      } catch (error) {
-        console.warn('归档视频到 TOS 失败，回退本地缓存：', error)
-        try {
-          const cached = await cacheGeneratedVideo(compliantVideoBuffer, taskId, generatedVideosRoot)
-          data.videoUrl = cached.videoUrl
-          data.posterUrl = cached.posterUrl || ''
-        } catch (cacheError) {
-          throw new Error(
-            `合规视频归档失败，未返回未标识的临时视频：${cacheError instanceof Error ? cacheError.message : String(cacheError)}`,
-          )
-        }
+        data = await finalization
+      } finally {
+        if (jobFinalizationPromises.get(taskId) === finalization) jobFinalizationPromises.delete(taskId)
       }
-      updateJob(taskId, { status: 'succeeded', resultVideoUrl: data.videoUrl, message: data.message })
-      await settleTokenOutcomeIfNeeded(taskId, 'success', { videoUrl: data.videoUrl })
     } else if (data.status === 'failed') {
       updateJob(taskId, { status: 'failed', message: data.message })
       await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
