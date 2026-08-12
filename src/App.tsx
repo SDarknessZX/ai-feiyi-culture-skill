@@ -58,6 +58,7 @@ type CreateResult = {
   posterUrl?: string
   inputImageUrl?: string
   createdAt?: number
+  progress?: number
 }
 
 type ModeDraft = {
@@ -138,6 +139,7 @@ type CreationRecord = {
   message: string
   videoUrl?: string
   posterUrl?: string
+  progress?: number
   createdAt: string
   source: 'work' | 'draft'
 }
@@ -525,7 +527,7 @@ function loadChatHistory(): ChatResultHistoryItem[] {
 
 function savePendingTask(mode: ModeId, task: CreateResult) {
   const pending = loadPendingTasks()
-  pending[mode] = task
+  pending[mode] = mergeTaskProgress(pending[mode], task)
   window.localStorage.setItem(pendingStorageKey, JSON.stringify(pending))
 }
 
@@ -1672,7 +1674,11 @@ function App() {
       }
     }
     const context = activeCreationContextRef.current[targetMode]
-    data = { ...data, mode: targetMode, createdAt: context?.createdAt ? context.createdAt + 1 : Date.now() }
+    data = mergeTaskProgress(undefined, {
+      ...data,
+      mode: targetMode,
+      createdAt: context?.createdAt ? context.createdAt + 1 : Date.now(),
+    })
     if (data.inputImageUrl) updateCreationMessageImage(targetMode, data.inputImageUrl)
     updateDraft(targetMode, { result: data })
     saveWork(data)
@@ -1980,8 +1986,12 @@ function App() {
           continue
         }
 
-        current = { ...current, ...data, mode: targetMode }
+        current = mergeTaskProgress(current, { ...data, mode: targetMode })
         updateDraft(targetMode, { result: current })
+
+        if (current.status === 'queued' || current.status === 'running') {
+          savePendingTask(targetMode, current)
+        }
 
         if (current.status === 'succeeded') {
           saveWork(current)
@@ -2066,7 +2076,7 @@ function App() {
                 { cache: 'no-store' },
               )
               const data = (await response.json()) as CreateResult
-              current = { ...current, ...data, mode: pendingMode }
+              current = mergeTaskProgress(current, { ...data, mode: pendingMode })
               updateDraft(pendingMode, { result: current })
             } catch {
               // 页面恢复时单次查询失败不清除任务，交给后续自动轮询继续处理。
@@ -4430,6 +4440,7 @@ function buildCreationRecords(works: WorkItem[], drafts: Record<ModeId, ModeDraf
         message: result.message,
         videoUrl: result.videoUrl || result.previewUrl,
         posterUrl: result.posterUrl,
+        progress: result.progress,
         createdAt: new Date().toISOString(),
         source: 'draft' as const,
       },
@@ -4535,9 +4546,10 @@ function formatFullTime(value: string) {
   })
 }
 
-function getTaskProgress(result: Pick<CreateResult, 'status' | 'message'>) {
+function getTaskProgress(result: Pick<CreateResult, 'status' | 'message'> & { progress?: number }) {
   if (result.status === 'succeeded') return 100
   if (result.status === 'failed') return 100
+  if (Number.isFinite(result.progress)) return clamp(Math.round(result.progress as number), 0, 99)
   const message = result.message || ''
   if (/提交|视频生成任务|Ark/.test(message)) return 72
   if (/参考图|换装/.test(message)) return 54
@@ -4545,6 +4557,18 @@ function getTaskProgress(result: Pick<CreateResult, 'status' | 'message'>) {
   if (/上传|素材/.test(message)) return 28
   if (result.status === 'running') return 62
   return 18
+}
+
+function mergeTaskProgress(previous: CreateResult | undefined, incoming: CreateResult): CreateResult {
+  if (!previous || previous.taskId !== incoming.taskId) {
+    return { ...incoming, progress: getTaskProgress(incoming) }
+  }
+
+  return {
+    ...previous,
+    ...incoming,
+    progress: Math.max(getTaskProgress(previous), getTaskProgress(incoming)),
+  }
 }
 
 function canvasHasVisiblePixels(context: CanvasRenderingContext2D, width: number, height: number) {

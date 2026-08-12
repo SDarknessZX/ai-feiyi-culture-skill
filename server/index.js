@@ -117,7 +117,11 @@ const jobTtlMs = 3 * 60 * 60 * 1000
 function updateJob(jobId, patch) {
   const job = jobs.get(jobId)
   if (!job) return
-  Object.assign(job, patch, { updatedAt: Date.now() })
+  const nextPatch = { ...patch }
+  if (Number.isFinite(nextPatch.progress)) {
+    nextPatch.progress = Math.max(Number(job.progress) || 0, Number(nextPatch.progress))
+  }
+  Object.assign(job, nextPatch, { updatedAt: Date.now() })
 }
 
 setInterval(() => {
@@ -129,23 +133,23 @@ setInterval(() => {
 
 async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
   try {
-    updateJob(jobId, { status: 'running' })
+    updateJob(jobId, { status: 'running', progress: 28 })
     updateMiguTokenTaskState(jobId, 'running')
 
     if (mode === 'food') {
-      updateJob(jobId, { message: '正在识别美食并生成专属提示词...' })
+      updateJob(jobId, { message: '正在识别美食并生成专属提示词...', progress: 46 })
       const generatedPrompt = await generateFoodVideoPrompt({
         imageUrl,
         systemPrompt: foodSystemPrompt,
       })
-      updateJob(jobId, { message: '正在提交视频生成任务...' })
+      updateJob(jobId, { message: '正在提交视频生成任务...', progress: 72 })
       const task = await submitImageToVideoTask({ mode, imageUrl, prompt: generatedPrompt })
-      updateJob(jobId, { arkTaskId: task.taskId, message: task.message })
+      updateJob(jobId, { arkTaskId: task.taskId, message: task.message, progress: 72 })
       return
     }
 
     if (mode === 'costume') {
-      updateJob(jobId, { message: '正在生成换装参考图（约需 1 分钟）...' })
+      updateJob(jobId, { message: '正在生成换装参考图（约需 1 分钟）...', progress: 54 })
       const costumeReferenceImageUrl = await generateCostumeReferenceImage({
         sourceImageUrl: imageUrl,
         prompt: buildCostumeReferencePrompt(),
@@ -153,19 +157,20 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
       updateJob(jobId, {
         message: '参考图已生成，正在提交视频生成任务...',
         mediumResults: [{ contentType: 'image', content: costumeReferenceImageUrl }],
+        progress: 68,
       })
       const task = await submitImageToVideoTask({
         mode,
         imageUrl: costumeReferenceImageUrl,
         prompt: buildCostumeVideoPrompt({ stylePrompt: style.prompt, gender }),
       })
-      updateJob(jobId, { arkTaskId: task.taskId, message: task.message })
+      updateJob(jobId, { arkTaskId: task.taskId, message: task.message, progress: 72 })
       return
     }
 
-    updateJob(jobId, { message: '正在提交视频生成任务...' })
+    updateJob(jobId, { message: '正在提交视频生成任务...', progress: 72 })
     const task = await submitImageToVideoTask({ mode, imageUrl, prompt: style.prompt })
-    updateJob(jobId, { arkTaskId: task.taskId, message: task.message })
+    updateJob(jobId, { arkTaskId: task.taskId, message: task.message, progress: 72 })
   } catch (error) {
     const message = error instanceof Error ? error.message : '任务处理失败。'
     updateJob(jobId, {
@@ -738,6 +743,7 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
 
   jobs.set(jobId, {
     status: 'queued',
+    progress: 18,
     mode: input.mode,
     templateTitle: styleCheck.templateTitle,
     arkTaskId: '',
@@ -758,6 +764,7 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
   return response.json({
     taskId: jobId,
     status: 'queued',
+    progress: 18,
     mode: input.mode,
     templateTitle: styleCheck.templateTitle,
     inputImageUrl: imageUrl,
@@ -917,6 +924,7 @@ app.post('/api/create/start', async (request, response) => {
   const templateTitle = input.templateTitle || styleCheck.templateTitle
   jobs.set(jobId, {
     status: 'queued',
+    progress: 18,
     mode: input.mode,
     templateTitle,
     arkTaskId: '',
@@ -939,6 +947,7 @@ app.post('/api/create/start', async (request, response) => {
   return response.json({
     taskId: jobId,
     status: 'queued',
+    progress: 18,
     mode: input.mode,
     templateTitle,
     inputImageUrl: input.imageUrl,
@@ -973,6 +982,7 @@ app.get('/api/tasks/:taskId', async (request, response) => {
       return response.json({
         taskId,
         status: 'succeeded',
+        progress: 100,
         mode,
         videoUrl: archived.videoUrl,
         posterUrl: archived.posterUrl || '',
@@ -1000,6 +1010,7 @@ app.get('/api/tasks/:taskId', async (request, response) => {
         return response.json({
           taskId,
           status: job.status === 'failed' ? 'failed' : 'running',
+          progress: job.status === 'failed' ? 100 : job.progress,
           mode: job.mode,
           templateTitle,
           message: job.message,
@@ -1009,9 +1020,14 @@ app.get('/api/tasks/:taskId', async (request, response) => {
     }
 
     let data = await queryVideoGenerationTask(arkTaskId)
+    const job = taskId.startsWith('job-') ? jobs.get(taskId) : null
+    if (job && data.status !== 'succeeded' && data.status !== 'failed') {
+      data.progress = Math.max(Number(job.progress) || 0, Number(data.progress) || 0)
+    }
     if (data.status === 'succeeded' && data.videoUrl) {
       // 同一任务可能被页面恢复、前台轮询等同时查询。机审、水印、归档必须只执行一次，
       // 其余请求共享同一个 Promise，避免同一个火山结果被重复送审和重复落库展示。
+      updateJob(taskId, { progress: 86 })
       let finalization = jobFinalizationPromises.get(taskId)
       if (!finalization) {
         finalization = finalizeGeneratedVideo({ taskId, mode, templateTitle, generated: data })
