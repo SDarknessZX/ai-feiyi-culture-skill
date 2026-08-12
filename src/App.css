@@ -458,9 +458,31 @@ button:disabled {
     filter 0.24s ease;
 }
 
-.template-card span,
-.template-card strong,
-.template-card em {
+.template-video-preview {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+}
+
+.template-card .template-video-preview img,
+.template-card .template-video-preview video {
+  position: absolute;
+  inset: 0;
+}
+
+.template-card .template-video-preview video {
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.template-card .template-video-preview video.ready {
+  opacity: 1;
+}
+
+.template-card > span,
+.template-card > strong,
+.template-card > em {
   position: absolute;
   z-index: 1;
   left: 12px;
@@ -468,7 +490,7 @@ button:disabled {
   text-align: left;
 }
 
-.template-card span {
+.template-card > span {
   top: 12px;
   overflow: hidden;
   color: rgba(255, 255, 255, 0.92);
@@ -479,7 +501,7 @@ button:disabled {
   text-shadow: 0 1px 7px rgba(0, 0, 0, 0.38);
 }
 
-.template-card strong {
+.template-card > strong {
   bottom: 56px;
   display: -webkit-box;
   overflow: hidden;
@@ -491,7 +513,7 @@ button:disabled {
   -webkit-line-clamp: 2;
 }
 
-.template-card em {
+.template-card > em {
   bottom: 10px;
   display: grid;
   height: 38px;
@@ -3119,7 +3141,7 @@ button:disabled {
     linear-gradient(180deg, transparent 58%, rgba(9, 19, 40, 0.42) 100%);
 }
 
-.template-card span {
+.template-card > span {
   top: 9px;
   right: 8px;
   left: 8px;
@@ -3131,7 +3153,7 @@ button:disabled {
   display: none;
 }
 
-.template-card em {
+.template-card > em {
   right: 7px;
   bottom: 7px;
   left: 7px;
@@ -3939,17 +3961,19 @@ button:disabled {
 
 .view-home .template-rail {
   min-height: 218px;
-  align-items: flex-start;
+  align-items: center;
   gap: 28px;
   padding: 0 calc((100% - 132px) / 2);
 }
 
 .view-home .template-card {
-  width: 128px;
-  height: 194px;
-  flex-basis: 128px;
-  margin-top: 24px;
+  width: 132px;
+  height: 218px;
+  flex-basis: 132px;
+  margin-top: 0;
   border-radius: 6px;
+  transform: scale(0.89);
+  transform-origin: center;
 }
 
 .view-home .template-card.selected {
@@ -3957,9 +3981,18 @@ button:disabled {
   height: 218px;
   flex-basis: 132px;
   margin-top: 0;
+  transform: scale(1);
 }
 
-.view-home .template-card em {
+.view-home .template-card:hover {
+  transform: scale(0.89);
+}
+
+.view-home .template-card.selected:hover {
+  transform: scale(1);
+}
+
+.view-home .template-card > em {
   right: 8px;
   bottom: 8px;
   left: 8px;

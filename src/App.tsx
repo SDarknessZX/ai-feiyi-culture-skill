@@ -2612,8 +2612,8 @@ function TemplateCarousel({
 }) {
   const railRef = useRef<HTMLDivElement | null>(null)
   const cardRefs = useRef(new Map<string, HTMLElement>())
-  const scrollFrameRef = useRef<number | null>(null)
-  const scrollSelectedIdRef = useRef('')
+  const scrollEndTimerRef = useRef<number | null>(null)
+  const selectionFromScrollRef = useRef(false)
   const selectedIndex = Math.max(0, items.findIndex((item) => item.id === selectedId))
 
   function centerTemplate(id: string, behavior: ScrollBehavior = 'smooth') {
@@ -2627,8 +2627,8 @@ function TemplateCarousel({
   }
 
   useEffect(() => {
-    if (scrollSelectedIdRef.current === selectedId) {
-      scrollSelectedIdRef.current = ''
+    if (selectionFromScrollRef.current) {
+      selectionFromScrollRef.current = false
       return
     }
     const frame = window.requestAnimationFrame(() => centerTemplate(selectedId, 'smooth'))
@@ -2645,10 +2645,14 @@ function TemplateCarousel({
     window.requestAnimationFrame(() => centerTemplate(next.id))
   }
 
-  function syncSelectionToScroll() {
-    if (scrollFrameRef.current !== null) return
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      scrollFrameRef.current = null
+  useEffect(() => () => {
+    if (scrollEndTimerRef.current !== null) window.clearTimeout(scrollEndTimerRef.current)
+  }, [])
+
+  function settleSelectionAfterScroll() {
+    if (scrollEndTimerRef.current !== null) window.clearTimeout(scrollEndTimerRef.current)
+    scrollEndTimerRef.current = window.setTimeout(() => {
+      scrollEndTimerRef.current = null
       const rail = railRef.current
       if (!rail) return
       const railRect = rail.getBoundingClientRect()
@@ -2665,11 +2669,13 @@ function TemplateCarousel({
           nearestId = item.id
         }
       }
-      if (nearestId && nearestId !== selectedId) {
-        scrollSelectedIdRef.current = nearestId
+      if (!nearestId) return
+      if (nearestId !== selectedId) {
+        selectionFromScrollRef.current = true
         onSelect(nearestId)
       }
-    })
+      if (nearestDistance > 1.5) centerTemplate(nearestId)
+    }, 120)
   }
 
   return (
@@ -2680,7 +2686,7 @@ function TemplateCarousel({
       <div
         className="template-rail"
         ref={railRef}
-        onScroll={syncSelectionToScroll}
+        onScroll={settleSelectionAfterScroll}
         onWheel={(event) => {
           if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
           event.preventDefault()
@@ -2704,6 +2710,7 @@ function TemplateCarousel({
                 aria-label={`查看${item.title}模板详情`}
                 onClick={() => {
                   if (!selected) {
+                    selectionFromScrollRef.current = true
                     onSelect(item.id)
                     window.requestAnimationFrame(() => centerTemplate(item.id))
                     return
@@ -2872,6 +2879,7 @@ function TemplateMedia({ item, className = '', preferVideo = false }: { item: Te
 
 function AutoPlayTemplateVideo({ src, poster, className = '' }: { src: string; poster: string; className?: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [ready, setReady] = useState(false)
 
   function startPlayback(video: HTMLVideoElement) {
     video.muted = true
@@ -2884,24 +2892,31 @@ function AutoPlayTemplateVideo({ src, poster, className = '' }: { src: string; p
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
+    setReady(false)
     video.load()
     startPlayback(video)
   }, [src])
 
   return (
-    <video
-      ref={videoRef}
-      className={className}
-      src={src}
-      poster={poster}
-      muted
-      autoPlay
-      loop
-      playsInline
-      preload="auto"
-      onLoadedData={(event) => startPlayback(event.currentTarget)}
-      onCanPlay={(event) => startPlayback(event.currentTarget)}
-    />
+    <div className={`template-video-preview${className ? ` ${className}` : ''}`}>
+      <img src={poster} alt="" decoding="async" />
+      <video
+        ref={videoRef}
+        className={ready ? 'ready' : ''}
+        src={src}
+        poster={poster}
+        muted
+        autoPlay
+        loop
+        playsInline
+        preload="auto"
+        onLoadedData={(event) => {
+          setReady(true)
+          startPlayback(event.currentTarget)
+        }}
+        onCanPlay={(event) => startPlayback(event.currentTarget)}
+      />
+    </div>
   )
 }
 
