@@ -2688,6 +2688,20 @@ button:disabled {
   line-height: 1.2;
 }
 
+.sample-tile .sample-loading {
+  position: absolute;
+  z-index: 5;
+  right: 7px;
+  bottom: 7px;
+  color: #fff;
+  filter: drop-shadow(0 1px 3px rgba(15, 30, 60, 0.38));
+}
+
+.panel-send:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .library-grid-tools button {
   display: inline-flex;
   width: auto;

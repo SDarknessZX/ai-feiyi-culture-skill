@@ -64,6 +64,8 @@ type CreateResult = {
 type ModeDraft = {
   file: File | null
   preview: string
+  selectedSampleId?: string
+  sampleLoading: boolean
   result: CreateResult | null
   busy: boolean
   polling: boolean
@@ -588,6 +590,8 @@ function createEmptyDraft(): ModeDraft {
   return {
     file: null,
     preview: '',
+    selectedSampleId: undefined,
+    sampleLoading: false,
     result: null,
     busy: false,
     polling: false,
@@ -662,6 +666,7 @@ function App() {
   const activeCreationContextRef = useRef<Partial<Record<ModeId, CreationContext>>>({})
   const creationStartingRef = useRef(false)
   const pollingTaskIdsRef = useRef(new Set<string>())
+  const sampleRequestVersionRef = useRef<Record<ModeId, number>>({ costume: 0, food: 0, painting: 0 })
   const pendingRefreshInFlightRef = useRef<Promise<void> | null>(null)
   // 咱们的 jobId -> 咪咕 taskId，创作完成事件上报要用，跨 pollTask 的多轮请求持续存在
   const miguTaskIdByJobRef = useRef<Record<string, string>>({})
@@ -713,6 +718,14 @@ function App() {
   }
 
   async function chooseSampleImage(targetMode: ModeId, sample: SampleImage): Promise<File | null> {
+    const requestVersion = sampleRequestVersionRef.current[targetMode] + 1
+    sampleRequestVersionRef.current[targetMode] = requestVersion
+    updateDraft(targetMode, {
+      file: null,
+      preview: sample.imageUrl,
+      selectedSampleId: sample.id,
+      sampleLoading: true,
+    })
     try {
       const response = await fetch(sample.imageUrl, { cache: 'force-cache' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -720,16 +733,28 @@ function App() {
       const fileType = blob.type || 'image/webp'
       const extension = fileType.includes('png') ? 'png' : fileType.includes('jpeg') ? 'jpg' : 'webp'
       const sampleFile = new File([blob], `${sample.id}.${extension}`, { type: fileType })
+      if (sampleRequestVersionRef.current[targetMode] !== requestVersion) return null
       updateDraft(targetMode, {
         file: sampleFile,
         preview: sample.imageUrl,
+        selectedSampleId: sample.id,
+        sampleLoading: false,
       })
       return sampleFile
     } catch {
+      if (sampleRequestVersionRef.current[targetMode] !== requestVersion) return null
+      updateDraft(targetMode, { file: null, sampleLoading: false })
       setToast('样例图片加载失败，请重试')
       return null
     }
   }
+
+  useEffect(() => {
+    for (const sample of Object.values(sampleImagesByMode).flat()) {
+      const thumbnail = new Image()
+      thumbnail.src = sample.thumbnailUrl
+    }
+  }, [])
 
   useEffect(() => {
     window.localStorage.setItem(worksStorageKey, JSON.stringify(works))
@@ -1265,8 +1290,10 @@ function App() {
   function choosePanelTemplate(templateId: string) {
     chooseTemplate(templateId)
     const preset = getTemplatePreset(mode, templateId)
-    const currentPreviewIsSample = sampleImagesByMode[mode].some((item) => item.imageUrl === drafts[mode].preview)
-    if (!drafts[mode].file || currentPreviewIsSample) void chooseSampleImage(mode, preset.sample)
+    const currentPreviewIsSample = Object.values(sampleImagesByMode).flat().some((item) => item.imageUrl === drafts[mode].preview)
+    if (!drafts[mode].file || drafts[mode].selectedSampleId || currentPreviewIsSample) {
+      void chooseSampleImage(mode, preset.sample)
+    }
   }
 
   function choosePanelMode(nextMode: ModeId) {
@@ -1276,8 +1303,10 @@ function App() {
     const targetTemplate = targetTemplates.find((item) => item.id === selectedId) || targetTemplates[0]
     if (!targetTemplate) return
     const preset = getTemplatePreset(nextMode, targetTemplate.id)
-    const currentPreviewIsSample = sampleImagesByMode[nextMode].some((item) => item.imageUrl === drafts[nextMode].preview)
-    if (!drafts[nextMode].file || currentPreviewIsSample) void chooseSampleImage(nextMode, preset.sample)
+    const currentPreviewIsSample = Object.values(sampleImagesByMode).flat().some((item) => item.imageUrl === drafts[nextMode].preview)
+    if (!drafts[nextMode].file || drafts[nextMode].selectedSampleId || currentPreviewIsSample) {
+      void chooseSampleImage(nextMode, preset.sample)
+    }
   }
 
   function closeUploadOverlays() {
@@ -1448,6 +1477,8 @@ function App() {
     updateDraft(mode, {
       file: nextFile,
       preview: URL.createObjectURL(nextFile),
+      selectedSampleId: undefined,
+      sampleLoading: false,
     })
     setUploadFlowPending(false)
     setCropRatio('9:16')
@@ -1477,7 +1508,7 @@ function App() {
     }
 
     const croppedPreview = URL.createObjectURL(croppedFile)
-    updateDraft(mode, { file: croppedFile, preview: croppedPreview })
+    updateDraft(mode, { file: croppedFile, preview: croppedPreview, selectedSampleId: undefined, sampleLoading: false })
     setShowCropSheet(false)
     if (mode === 'costume') {
       setFaceReviewing(true)
@@ -1506,6 +1537,8 @@ function App() {
     updateDraft(mode, {
       file: null,
       preview: '',
+      selectedSampleId: undefined,
+      sampleLoading: false,
     })
     setPreviewImageUrl('')
   }
@@ -1622,7 +1655,7 @@ function App() {
       if (targetMode === 'food' && context.templateId) setFoodShowcase(context.templateId)
       if (targetMode === 'painting' && context.templateId) setPaintingStyle(context.templateId)
       if (context.gender) setGender(context.gender)
-      updateDraft(targetMode, { file: context.file, preview: context.preview })
+      updateDraft(targetMode, { file: context.file, preview: context.preview, selectedSampleId: undefined, sampleLoading: false })
     } else if (fallbackImageUrl) {
       try {
         const imageResponse = await fetch(fallbackImageUrl, { cache: 'force-cache' })
@@ -1630,7 +1663,7 @@ function App() {
         const imageBlob = await imageResponse.blob()
         const extension = imageBlob.type.includes('png') ? 'png' : imageBlob.type.includes('webp') ? 'webp' : 'jpg'
         const imageFile = new File([imageBlob], `regenerate.${extension}`, { type: imageBlob.type || 'image/jpeg' })
-        updateDraft(targetMode, { file: imageFile, preview: fallbackImageUrl })
+        updateDraft(targetMode, { file: imageFile, preview: fallbackImageUrl, selectedSampleId: undefined, sampleLoading: false })
       } catch {
         setToast('原始图片加载失败，请重新选择图片')
       }
@@ -2332,6 +2365,8 @@ function App() {
           mode={mode}
           preview={preview}
           samples={sampleImagesByMode[mode]}
+          sampleLoading={drafts[mode].sampleLoading}
+          selectedSampleId={drafts[mode].selectedSampleId}
           selectedTemplate={selectedTemplate}
           templates={visibleTemplates}
           onClose={() => {
@@ -2349,6 +2384,10 @@ function App() {
             }
           }}
           onCreate={() => {
+            if (drafts[mode].sampleLoading) {
+              setToast('示例图片正在准备，请稍候')
+              return
+            }
             void createVideo()
           }}
           onGenderChange={setGender}
@@ -4217,7 +4256,9 @@ function CreationPanel({
   imageReviewing,
   mode,
   preview,
+  sampleLoading,
   samples,
+  selectedSampleId,
   selectedTemplate,
   templates,
   onAgreementChange,
@@ -4238,7 +4279,9 @@ function CreationPanel({
   imageReviewing: boolean
   mode: ModeId
   preview: string
+  sampleLoading: boolean
   samples: SampleImage[]
+  selectedSampleId?: string
   selectedTemplate?: TemplateItem
   templates: TemplateItem[]
   onAgreementChange: (accepted: boolean) => void
@@ -4253,10 +4296,10 @@ function CreationPanel({
   onSelectSample: (sample: SampleImage) => void
   onSelectTemplate: (id: string) => void
 }) {
-  const selectedSampleId = samples.find((sample) => sample.imageUrl === preview)?.id
-  const hasUploadedPreview = Boolean(preview && !selectedSampleId)
+  const effectiveSelectedSampleId = selectedSampleId || Object.values(sampleImagesByMode).flat().find((sample) => sample.imageUrl === preview)?.id
+  const hasUploadedPreview = Boolean(preview && !effectiveSelectedSampleId)
   const templateIndex = Math.max(0, templates.findIndex((item) => item.id === selectedTemplate?.id))
-  const contextualSample = samples[templateIndex % samples.length] || samples[0]
+  const contextualSample = samples.find((sample) => sample.id === effectiveSelectedSampleId) || samples[templateIndex % samples.length] || samples[0]
 
   return (
     <div className="sheet-backdrop panel-backdrop" role="presentation" onClick={onClose}>
@@ -4301,15 +4344,16 @@ function CreationPanel({
           )}
           {contextualSample && (
             <button
-              className={contextualSample.id === selectedSampleId ? 'asset-tile sample-tile selected' : 'asset-tile sample-tile'}
+              className={contextualSample.id === effectiveSelectedSampleId ? 'asset-tile sample-tile selected' : 'asset-tile sample-tile'}
               type="button"
               title={contextualSample.title}
               aria-label={`选择${activeMode.short}示例图`}
               onClick={() => onSelectSample(contextualSample)}
             >
-              <img src={contextualSample.thumbnailUrl} alt={contextualSample.title} width={240} height={240} decoding="async" />
+              <img key={contextualSample.id} src={contextualSample.thumbnailUrl} alt={contextualSample.title} width={240} height={240} decoding="async" />
               <span className="sample-label">示例</span>
-              {contextualSample.id === selectedSampleId && <CheckBadge />}
+              {contextualSample.id === effectiveSelectedSampleId && <CheckBadge />}
+              {contextualSample.id === effectiveSelectedSampleId && sampleLoading && <Loader2 className="sample-loading spin" size={16} />}
             </button>
           )}
         </div>
@@ -4357,7 +4401,7 @@ function CreationPanel({
           ))}
         </div>
         <div className="panel-footer">
-          <button className="panel-send" type="button" onClick={onCreate}>
+          <button className="panel-send" type="button" onClick={onCreate} disabled={sampleLoading} aria-busy={sampleLoading}>
             <small>消耗 3</small>
             发送
           </button>
