@@ -219,6 +219,11 @@ export async function auditContent({ kind, content, contentId, description }) {
     throw error
   }
 
+  console.info(
+    '[contentAudit] 送审已受理',
+    JSON.stringify({ kind, contentId: body.contentId, dataId: result.dataId || dataId, status: result.status || 'PENDING' }),
+  )
+
   if (kind === 'text' || isFinalResult(kind, result)) {
     if (waitForCallback) settlePendingAudit(dataId, () => {})
     return normalizeAuditResult(result)

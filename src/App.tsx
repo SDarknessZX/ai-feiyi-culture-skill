@@ -49,6 +49,7 @@ type UploadSource = 'camera' | 'gallery'
 type CreateResult = {
   taskId?: string
   code?: string
+  auditId?: string
   status: TaskStatus
   mode: ModeId
   message: string
@@ -1437,19 +1438,40 @@ function App() {
     restorePreviousPanel()
   }
 
-  async function reviewImage(nextFile: File) {
-    if (!nextFile.type.startsWith('image/') || nextFile.size > 12 * 1024 * 1024) return false
+  async function reviewImage(nextFile: File): Promise<{ passed: true } | { passed: false; message: string }> {
+    if (!nextFile.size) return { passed: false, message: '图片文件为空，请重新选择。' }
+    if (nextFile.size > 12 * 1024 * 1024) {
+      return { passed: false, message: '图片超过 12MB，请压缩后重新上传。' }
+    }
     const objectUrl = URL.createObjectURL(nextFile)
-    try {
-      const dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const readDimensions = (src: string) =>
+      new Promise<{ width: number; height: number }>((resolve, reject) => {
         const image = new Image()
         image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
         image.onerror = reject
-        image.src = objectUrl
+        image.src = src
       })
-      return dimensions.width >= 160 && dimensions.height >= 160
+    try {
+      let dimensions
+      try {
+        dimensions = await readDimensions(objectUrl)
+      } catch {
+        // 部分微信/iOS WebView 偶发无法解码刚创建的 blob URL，改用 data URL 再读一次，
+        // 避免把浏览器瞬时读取失败误报成内容审核不通过。
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => (typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('EMPTY_IMAGE')))
+          reader.onerror = () => reject(reader.error || new Error('IMAGE_READ_FAILED'))
+          reader.readAsDataURL(nextFile)
+        })
+        dimensions = await readDimensions(dataUrl)
+      }
+      if (dimensions.width < 160 || dimensions.height < 160) {
+        return { passed: false, message: '图片尺寸过小，请上传宽高至少 160 像素的图片。' }
+      }
+      return { passed: true }
     } catch {
-      return false
+      return { passed: false, message: '无法读取这张图片，请换用 JPG、PNG 或 WebP 格式。' }
     } finally {
       URL.revokeObjectURL(objectUrl)
     }
@@ -1464,12 +1486,11 @@ function App() {
     setImageReviewing(true)
     setShowCreationPanel(false)
     closeUploadOverlays()
-    const reviewPassed = await reviewImage(nextFile)
-    await wait(350)
+    const reviewResult = await reviewImage(nextFile)
     setImageReviewing(false)
 
-    if (!reviewPassed) {
-      setToast('审核不通过，请重新上传')
+    if (!reviewResult.passed) {
+      setToast(reviewResult.message)
       restorePreviousPanel()
       return
     }
@@ -1763,13 +1784,21 @@ function App() {
       const prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
       const prepared = (await prepareResponse.json()) as {
         status?: string
+        code?: string
+        auditId?: string
         message?: string
         templateTitle?: string
         imageUrl?: string
       }
       if (!prepareResponse.ok || prepared.status !== 'ready' || !prepared.imageUrl) {
         updateDraft(targetMode, {
-          result: { status: 'failed', mode: targetMode, message: prepared.message || '素材准备失败，请稍后重试。' },
+          result: {
+            status: 'failed',
+            mode: targetMode,
+            code: prepared.code,
+            auditId: prepared.auditId,
+            message: prepared.message || '素材准备失败，请稍后重试。',
+          },
         })
         return
       }
@@ -3924,8 +3953,8 @@ function ReviewingOverlay({ kind }: { kind: 'machine' | 'face' }) {
     <div className="modal-backdrop soft reviewing-backdrop" role="status" aria-live="polite">
       <div className="reviewing-card">
         <Loader2 className="spin" size={25} />
-        <strong>{kind === 'machine' ? '图片机审中…' : '人脸校验中…'}</strong>
-        <span>{kind === 'machine' ? '正在检查图片内容与清晰度' : '正在确认照片中有清晰人脸'}</span>
+        <strong>{kind === 'machine' ? '图片读取中…' : '人脸校验中…'}</strong>
+        <span>{kind === 'machine' ? '正在验证图片格式与清晰度' : '正在确认照片中有清晰人脸'}</span>
       </div>
     </div>
   )
@@ -4629,6 +4658,7 @@ function getChatFailureMessage(message: string, code?: string) {
 
 function getFailureMessage(message: string, code: string | undefined, detailed: boolean) {
   const combined = `${code || ''} ${message || ''}`.trim()
+  const auditId = message.match(/审核编号[：:]\s*([\w-]+)/)?.[1]
 
   if (/CREATE_RATE_LIMITED|请求过于频繁|生成请求过于频繁/.test(combined)) {
     return detailed ? '操作太频繁，请按提示稍后重试' : '操作太频繁，生成失败'
@@ -4641,7 +4671,7 @@ function getFailureMessage(message: string, code: string | undefined, detailed: 
     return '服务暂时不可用，系统会继续处理，请稍后刷新状态'
   }
   if (/PolicyViolation|SensitiveContent|Copyright|违规|不适合|未通过.*审核|审核未通过|500027|300103/.test(combined)) {
-    return '这个内容不适合展示哦'
+    return auditId ? `图片未通过内容审核（审核编号：${auditId}）` : '这个内容不适合展示哦'
   }
   if (/朗读|音频|准确率|500101/.test(combined)) {
     return detailed ? '朗读内容准确率低，请重新录制后重试' : '朗读内容准确率低'

@@ -730,14 +730,18 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     if (isAuditServiceUnavailable(inputAudit)) {
       return response.status(503).json({
         status: 'failed',
+        code: 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE',
         mode: input.mode,
         message: '内容审核服务暂时不可用，请稍后重试；本次并非判定为内容违规。',
       })
     }
+    const auditId = inputAudit.dataId || ''
     return response.status(422).json({
       status: 'failed',
+      code: 'CONTENT_AUDIT_REJECTED',
+      ...(auditId ? { auditId } : {}),
       mode: input.mode,
-      message: '您的输入不适合展示哦，请修改后重试',
+      message: `图片未通过内容审核，请修改后重试${auditId ? `（审核编号：${auditId}）` : ''}`,
     })
   }
 
@@ -849,14 +853,18 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
     if (isAuditServiceUnavailable(inputAudit)) {
       return response.status(503).json({
         status: 'failed',
+        code: 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE',
         mode: input.mode,
         message: '内容审核服务暂时不可用，请稍后重试；本次并非判定为内容违规。',
       })
     }
+    const auditId = inputAudit.dataId || ''
     return response.status(422).json({
       status: 'failed',
+      code: 'CONTENT_AUDIT_REJECTED',
+      ...(auditId ? { auditId } : {}),
       mode: input.mode,
-      message: '您的输入不适合展示哦，请修改后重试',
+      message: `图片未通过内容审核，请修改后重试${auditId ? `（审核编号：${auditId}）` : ''}`,
     })
   }
 
