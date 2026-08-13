@@ -174,6 +174,8 @@ export async function auditContent({ kind, content, contentId, description }) {
   auditStore.saveSubmission({ dataId, kind, contentId: auditContentId })
 
   let response
+  const requestController = new AbortController()
+  const requestTimeout = setTimeout(() => requestController.abort(), config.timeoutMs)
   try {
     response = await fetch(`${config.baseUrl}${REPORT_PATH}`, {
       method: 'POST',
@@ -182,12 +184,14 @@ export async function auditContent({ kind, content, contentId, description }) {
         Authorization: buildAuthorization(config),
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(config.timeoutMs),
+      signal: requestController.signal,
     })
   } catch (error) {
     auditStore.remove(dataId)
     const wrapped = new Error(`机审接口请求失败：${error instanceof Error ? error.message : String(error)}`)
     throw wrapped
+  } finally {
+    clearTimeout(requestTimeout)
   }
 
   if (!response.ok) {
