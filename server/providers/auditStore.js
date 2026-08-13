@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { chmodSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +24,13 @@ export function createAuditStore(dbPath = path.join(dataDir, 'audits.db')) {
     CREATE INDEX IF NOT EXISTS idx_content_audits_content
       ON content_audits(kind, content_id, updated_at DESC);
   `)
+  if (dbPath !== ':memory:') {
+    try {
+      chmodSync(dbPath, 0o600)
+    } catch {
+      // 容器或只读文件系统不支持 chmod 时，沿用运行环境权限。
+    }
+  }
   const upsertSubmission = db.prepare(`
     INSERT INTO content_audits (data_id, kind, content_id, status, label, submitted_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
