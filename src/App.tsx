@@ -867,7 +867,11 @@ function App() {
 
       void (async () => {
         try {
-          const response = await fetch(`/api/migu/aigc-login-url?token=${encodeURIComponent(loginToken)}`)
+          const response = await fetch('/api/migu/aigc-login-url', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ token: loginToken }),
+          })
           const data = (await response.json()) as { url?: string; message?: string }
           if (response.ok && data.url) {
             window.location.replace(data.url)
@@ -1363,7 +1367,11 @@ function App() {
       return
     }
     try {
-      const response = await fetch(`/api/migu/usage-detail-url?token=${encodeURIComponent(session.btoken)}`)
+      const response = await fetch('/api/migu/usage-detail-url', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: session.btoken }),
+      })
       const data = (await response.json()) as { url?: string; message?: string }
       if (response.ok && data.url) {
         window.open(data.url, '_blank', 'noopener,noreferrer')
@@ -1756,7 +1764,24 @@ function App() {
     formData.append('gender', overrides.gender || gender || 'female')
 
     try {
-      const response = await fetch('/api/create', { method: 'POST', body: formData })
+      let response = await fetch('/api/create', { method: 'POST', body: formData })
+      if (response.status === 202) {
+        const pending = (await response.json()) as { auditId?: string; message?: string }
+        updateDraft(targetMode, {
+          result: {
+            status: 'running',
+            code: 'CONTENT_AUDIT_PENDING',
+            auditId: pending.auditId,
+            mode: targetMode,
+            message: pending.message || '图片正在审核中，请稍候。',
+          },
+        })
+        if (!pending.auditId || !(await waitForAudit(pending.auditId, targetMode))) {
+          updateDraft(targetMode, { busy: false })
+          return
+        }
+        response = await fetch('/api/create', { method: 'POST', body: formData })
+      }
       await handleCreateApiResponse(targetMode, response)
     } catch {
       updateDraft(targetMode, {
@@ -1771,6 +1796,54 @@ function App() {
     }
   }
 
+  async function waitForAudit(auditId: string, targetMode: ModeId) {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (attempt > 0) await wait(3000)
+      try {
+        const response = await fetch(`/api/audits/${encodeURIComponent(auditId)}?_=${Date.now()}`, { cache: 'no-store' })
+        const result = (await response.json()) as { status?: string; passed?: boolean; unavailable?: boolean }
+        if (!response.ok) continue
+        if (result.status === 'completed') {
+          if (result.passed) return true
+          if (result.unavailable) {
+            updateDraft(targetMode, {
+              result: {
+                status: 'failed',
+                code: 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE',
+                auditId,
+                mode: targetMode,
+                message: '内容审核服务处理失败，请稍后重试；本次并非判定为内容违规。',
+              },
+            })
+            return false
+          }
+          updateDraft(targetMode, {
+            result: {
+              status: 'failed',
+              code: 'CONTENT_AUDIT_REJECTED',
+              auditId,
+              mode: targetMode,
+              message: `图片未通过内容审核（审核编号：${auditId}）`,
+            },
+          })
+          return false
+        }
+      } catch {
+        // 短暂网络错误继续轮询，审核记录已经保存在服务端。
+      }
+    }
+    updateDraft(targetMode, {
+      result: {
+        status: 'failed',
+        code: 'CONTENT_AUDIT_PENDING',
+        auditId,
+        mode: targetMode,
+        message: '图片审核仍在处理中，请稍后重新发送；系统会复用本次审核结果。',
+      },
+    })
+    return false
+  }
+
   // Token 网关开着时：先上传+机审拿 imageUrl，存好待提交状态，再整页跳转去咪咕拿 taskId
   async function beginTokenGatedCreation(targetMode: ModeId, file: File, btoken: string, overrides: CreationOverrides = {}) {
     const template = overrides.templateId ?? templateIdFor(targetMode)
@@ -1781,14 +1854,18 @@ function App() {
     formData.append('gender', overrides.gender || gender || 'female')
 
     try {
-      const prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
-      const prepared = (await prepareResponse.json()) as {
+      let prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
+      let prepared = (await prepareResponse.json()) as {
         status?: string
         code?: string
         auditId?: string
         message?: string
         templateTitle?: string
         imageUrl?: string
+      }
+      if (prepareResponse.status === 202 && prepared.auditId && (await waitForAudit(prepared.auditId, targetMode))) {
+        prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
+        prepared = (await prepareResponse.json()) as typeof prepared
       }
       if (!prepareResponse.ok || prepared.status !== 'ready' || !prepared.imageUrl) {
         updateDraft(targetMode, {

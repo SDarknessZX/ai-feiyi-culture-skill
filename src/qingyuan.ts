@@ -48,7 +48,10 @@ function getEntrySource(): string {
   try {
     let stored = window.sessionStorage.getItem(entrySourceStorageKey)
     if (!stored) {
-      const bytes = new TextEncoder().encode(window.location.href)
+      const safeUrl = new URL(window.location.href)
+      for (const key of ['btoken', 'token', 'otoken', 'cToken']) safeUrl.searchParams.delete(key)
+      safeUrl.hash = ''
+      const bytes = new TextEncoder().encode(safeUrl.toString())
       stored = window.btoa(String.fromCharCode(...bytes))
       window.sessionStorage.setItem(entrySourceStorageKey, stored)
     }

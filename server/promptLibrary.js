@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs'
 
+const templateVideoVersion = '20260813-1'
+const templateVideo = (fileName) => `/templates/${fileName}?v=${templateVideoVersion}`
+
 export const costumeEthnicItems = [
   ['ethnic-miao', '苗族'],
   ['ethnic-yi', '彝族'],
@@ -54,14 +57,14 @@ export const costumeImageMap = {
 }
 
 export const costumeVideoMap = {
-  'ethnic-miao': '/templates/非遗苗族.mp4',
-  'ethnic-yi': '/templates/非遗彝族.mp4',
-  'ethnic-dong': '/templates/非遗侗族.mp4',
-  'ethnic-zang': '/templates/非遗藏族.mp4',
-  'ethnic-uyghur': '/templates/非遗维吾尔族.mp4',
-  'ethnic-mongol': '/templates/非遗蒙古族.mp4',
-  'dynasty-song': '/templates/宋代雅韵.mp4',
-  'dynasty-dunhuang': '/templates/敦煌飞天.mp4',
+  'ethnic-miao': templateVideo('非遗苗族.mp4'),
+  'ethnic-yi': templateVideo('非遗彝族.mp4'),
+  'ethnic-dong': templateVideo('非遗侗族.mp4'),
+  'ethnic-zang': templateVideo('非遗藏族.mp4'),
+  'ethnic-uyghur': templateVideo('非遗维吾尔族.mp4'),
+  'ethnic-mongol': templateVideo('非遗蒙古族.mp4'),
+  'dynasty-song': templateVideo('宋代雅韵.mp4'),
+  'dynasty-dunhuang': templateVideo('敦煌飞天.mp4'),
 }
 
 // 图活非遗画作的统一提示词。修改 prompts/painting/paint.txt 后，服务会自动重启并生效。
@@ -120,21 +123,21 @@ export const paintingMotionTemplates = [
     id: 'new-year-figure',
     title: '年画人物活化',
     imageUrl: '/templates/painting-new-year.webp',
-    videoUrl: '/templates/年画人物活化.mp4',
+    videoUrl: templateVideo('年画人物活化.mp4'),
     prompt: paintingPrompt,
   },
   {
     id: 'paper-shadow',
     title: '剪纸皮影光影',
     imageUrl: '/templates/painting-paper-shadow.webp',
-    videoUrl: '/templates/剪纸皮影光影.mp4',
+    videoUrl: templateVideo('剪纸皮影光影.mp4'),
     prompt: paintingPrompt,
   },
   {
     id: 'mural-revive',
     title: '壁画复苏镜头',
     imageUrl: '/templates/painting-mural.webp',
-    videoUrl: '/templates/壁画复苏镜头.mp4',
+    videoUrl: templateVideo('壁画复苏镜头.mp4'),
     prompt: paintingPrompt,
   },
 ]
@@ -144,21 +147,21 @@ export const foodShowcaseTemplates = {
     {
       title: '长安臊子局',
       imageUrl: '/templates/food-zongzi-town.webp',
-      videoUrl: '/templates/美食1.mp4',
+      videoUrl: templateVideo('美食1.mp4'),
     },
   ],
   糖醋排骨: [
     {
       title: '老街酸甜局',
       imageUrl: '/templates/food-mooncake-bakery.webp',
-      videoUrl: '/templates/美食2.mp4',
+      videoUrl: templateVideo('美食2.mp4'),
     },
   ],
   月饼: [
     {
       title: '月宫烘焙局',
       imageUrl: '/templates/food-tea-snack.webp',
-      videoUrl: '/templates/美食3.mp4',
+      videoUrl: templateVideo('美食3.mp4'),
     },
   ],
 }

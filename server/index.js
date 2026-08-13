@@ -56,6 +56,8 @@ import { detectFaces, getFaceDetectionConfigReport } from './providers/faceDetec
 import { assertImageHasVisibleContent } from './providers/imageValidation.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
 import { createCreationRateLimiter, getTrustProxyHops } from './middleware/createRateLimit.js'
+import { loadStoredJobs, pruneStoredJobs, saveStoredJob } from './providers/jobStore.js'
+import { findStoredAudit } from './providers/auditStore.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const generatedVideosRoot = path.join(__dirname, '..', 'generated-videos')
@@ -110,9 +112,18 @@ const maxPosterSourceBytes = 60 * 1024 * 1024
 
 // 创建任务改为异步：/api/create 立刻返回 job id，重活在后台跑，
 // 避免公网隧道对长请求超时（serveo 等隧道等不到响应会回 502）。
-const jobs = new Map()
+const jobTtlMs = 7 * 24 * 60 * 60 * 1000
+const jobs = new Map(loadStoredJobs(Date.now() - jobTtlMs))
 const jobFinalizationPromises = new Map()
-const jobTtlMs = 3 * 60 * 60 * 1000
+const resumedJobIds = new Set()
+
+function registerJob(jobId, job) {
+  const now = Date.now()
+  const stored = { ...job, createdAt: Number(job.createdAt) || now, updatedAt: Number(job.updatedAt) || now }
+  jobs.set(jobId, stored)
+  saveStoredJob(jobId, stored)
+  return stored
+}
 
 function updateJob(jobId, patch) {
   const job = jobs.get(jobId)
@@ -122,6 +133,7 @@ function updateJob(jobId, patch) {
     nextPatch.progress = Math.max(Number(job.progress) || 0, Number(nextPatch.progress))
   }
   Object.assign(job, nextPatch, { updatedAt: Date.now() })
+  saveStoredJob(jobId, job)
 }
 
 setInterval(() => {
@@ -129,6 +141,7 @@ setInterval(() => {
   for (const [jobId, job] of jobs) {
     if (now - job.updatedAt > jobTtlMs) jobs.delete(jobId)
   }
+  pruneStoredJobs(now - jobTtlMs)
 }, 10 * 60 * 1000).unref()
 
 async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
@@ -191,6 +204,67 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
   }
 }
 
+function resumeStoredJobs() {
+  for (const [jobId, job] of jobs) {
+    if (!['queued', 'running'].includes(job.status) || job.arkTaskId || resumedJobIds.has(jobId)) continue
+    const styleCheck = resolveStyle(job.mode, job.templateId)
+    if (styleCheck.error || !job.inputImageUrl) {
+      updateJob(jobId, {
+        status: 'failed',
+        message: styleCheck.error?.message || '任务恢复失败：缺少原始素材地址。',
+      })
+      void settleTokenOutcomeIfNeeded(jobId, 'failure', {})
+      continue
+    }
+    resumedJobIds.add(jobId)
+    console.info('[job.resume]', JSON.stringify({ jobId, mode: job.mode, progress: job.progress }))
+    void runCreateJob({
+      jobId,
+      mode: job.mode,
+      gender: job.gender,
+      style: styleCheck.style,
+      file: null,
+      imageUrl: job.inputImageUrl,
+    })
+  }
+}
+
+async function refreshStoredArkJobs() {
+  const recoverable = [...jobs.entries()].filter(
+    ([, job]) => ['queued', 'running'].includes(job.status) && Boolean(job.arkTaskId),
+  )
+  await Promise.allSettled(
+    recoverable.map(async ([jobId, job]) => {
+      const generated = await queryVideoGenerationTask(job.arkTaskId)
+      if (generated.status === 'failed') {
+        updateJob(jobId, { status: 'failed', message: generated.message })
+        await settleTokenOutcomeIfNeeded(jobId, 'failure', {})
+        return
+      }
+      if (generated.status !== 'succeeded' || !generated.videoUrl) return
+      let finalization = jobFinalizationPromises.get(jobId)
+      if (!finalization) {
+        finalization = finalizeGeneratedVideo({
+          taskId: jobId,
+          mode: job.mode,
+          templateTitle: job.templateTitle,
+          generated,
+        })
+        jobFinalizationPromises.set(jobId, finalization)
+      }
+      try {
+        await finalization
+      } finally {
+        if (jobFinalizationPromises.get(jobId) === finalization) jobFinalizationPromises.delete(jobId)
+      }
+    }),
+  )
+}
+
+setInterval(() => {
+  void refreshStoredArkJobs()
+}, 15_000).unref()
+
 async function finalizeGeneratedVideo({ taskId, mode, templateTitle, generated }) {
   const data = { ...generated }
   const outputAudit = await checkContent({
@@ -199,6 +273,17 @@ async function finalizeGeneratedVideo({ taskId, mode, templateTitle, generated }
     contentId: taskId,
     description: `${mode} 生成结果视频`,
   })
+  if (outputAudit.pending) {
+    updateJob(taskId, {
+      status: 'running',
+      progress: 88,
+      auditDataId: outputAudit.dataId,
+      message: '视频已生成，正在等待内容审核结果...',
+    })
+    const error = new Error('视频已生成，正在等待内容审核结果。')
+    error.code = 'CONTENT_AUDIT_PENDING'
+    throw error
+  }
   if (!outputAudit.passed) {
     if (isAuditServiceUnavailable(outputAudit)) {
       const error = new Error('视频已生成，正在等待内容审核服务恢复，请稍候。')
@@ -323,6 +408,19 @@ async function settleTokenOutcomeIfNeeded(jobId, outcome, { inputImageUrl, video
   return operation
 }
 
+function resumePendingSettlements() {
+  for (const [jobId, job] of jobs) {
+    if (!job.miguTaskId || job.tokenSettlementStatus === 'settled') continue
+    if (!['succeeded', 'failed'].includes(job.status)) continue
+    const outcome = job.status === 'succeeded' ? 'success' : 'failure'
+    console.info('[migu.settlement.resume]', JSON.stringify({ jobId, outcome }))
+    void settleTokenOutcomeIfNeeded(jobId, outcome, {
+      inputImageUrl: job.inputImageUrl,
+      videoUrl: job.resultVideoUrl,
+    })
+  }
+}
+
 function publicCostume(template) {
   return {
     id: template.id,
@@ -363,15 +461,50 @@ const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
 if (configuredCorsOrigins.length) app.use(cors({ origin: configuredCorsOrigins }))
 else if (process.env.NODE_ENV !== 'production') app.use(cors())
 app.use(express.json())
-app.use((_request, response, next) => {
+app.use((request, response, next) => {
+  const requestId = String(request.headers['x-request-id'] || '').trim().slice(0, 128) || crypto.randomUUID()
+  request.requestId = requestId
   response.set({
+    'X-Request-Id': requestId,
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
   })
+  const sendJson = response.json.bind(response)
+  response.json = (body) => {
+    const safeBody =
+      response.statusCode >= 400 && body && typeof body === 'object' && !Array.isArray(body)
+        ? { ...body, requestId }
+        : body
+    if (response.statusCode === 422 && request.path.startsWith('/api/create')) {
+      console.warn(
+        '[create.validation]',
+        JSON.stringify({
+          requestId,
+          route: request.path,
+          status: response.statusCode,
+          code: safeBody?.code || 'CREATE_VALIDATION_REJECTED',
+          mode: safeBody?.mode || request.body?.mode || '',
+          auditId: safeBody?.auditId || '',
+        }),
+      )
+    }
+    return sendJson(safeBody)
+  }
   next()
 })
-app.use('/templates', express.static(path.join(__dirname, '..', 'public', 'templates')))
+app.use(
+  '/templates',
+  express.static(path.join(__dirname, '..', 'public', 'templates'), {
+    acceptRanges: true,
+    setHeaders: (response, filePath) => {
+      if (path.extname(filePath).toLowerCase() === '.mp4') {
+        response.setHeader('Content-Type', 'video/mp4')
+        response.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      }
+    },
+  }),
+)
 app.use(
   '/generated-videos',
   express.static(generatedVideosRoot, {
@@ -439,8 +572,8 @@ app.get('/api/migu/login-redirect', async (_request, response) => {
     response.status(400).send(error instanceof Error ? error.message : '无法跳转到咪咕登录。')
   }
 })
-app.get('/api/migu/aigc-login-url', (request, response) => {
-  const token = String(request.query.token || '').trim()
+app.post('/api/migu/aigc-login-url', (request, response) => {
+  const token = String(request.body?.token || '').trim()
   if (!token || token.length > 2048) {
     return response.status(400).json({ message: '咪咕登录回调 token 缺失或格式不正确。' })
   }
@@ -478,9 +611,9 @@ app.post('/api/migu/publish-url', async (request, response) => {
     response.status(400).json({ message: error instanceof Error ? error.message : '无法生成视频彩铃发布地址。' })
   }
 })
-app.get('/api/migu/usage-detail-url', (request, response) => {
-  const token = String(request.query.token || '').trim()
-  const cfrom = request.query.cfrom ? String(request.query.cfrom).trim() : undefined
+app.post('/api/migu/usage-detail-url', (request, response) => {
+  const token = String(request.body?.token || '').trim()
+  const cfrom = request.body?.cfrom ? String(request.body.cfrom).trim() : undefined
   try {
     const url = buildUsageDetailUrl({ token, cfrom })
     response.json({ url })
@@ -567,8 +700,22 @@ app.post('/api/migu/subscription-notify', async (request, response) => {
   response.json({ code: '000000', info: 'success' })
 })
 app.post('/api/compliance/callback', async (request, response) => {
-  console.log('机审回调收到：', JSON.stringify(request.body, null, 2))
-  handleAuditCallback(request.body)
+  const results = Array.isArray(request.body) ? request.body : request.body ? [request.body] : []
+  const matched = handleAuditCallback(request.body)
+  console.info(
+    '[contentAudit.callback]',
+    JSON.stringify({
+      requestId: request.requestId,
+      count: results.length,
+      matched,
+      results: results.map((item) => ({
+        dataId: item?.dataId || '',
+        status: item?.status || '',
+        label: item?.label || '',
+        dataType: item?.dataType || '',
+      })),
+    }),
+  )
 
   response.json({
     code: '000000',
@@ -576,6 +723,7 @@ app.post('/api/compliance/callback', async (request, response) => {
   })
 })
 app.get('/api/templates', (_request, response) => {
+  response.set('Cache-Control', 'no-store')
   response.json({
     costumes: costumeStyleTemplates.map(publicCostume),
     costumeEthnic: costumeEthnicTemplates.map(publicCostume),
@@ -676,6 +824,7 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
       message: error instanceof Error ? error.message : '图片内容无法识别，请重新上传。',
     })
   }
+  const imageFingerprint = crypto.createHash('sha256').update(await readFile(request.file.path)).digest('hex')
 
   if (input.mode === 'costume') {
     try {
@@ -684,6 +833,7 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
         await cleanupUpload(request)
         return response.status(422).json({
           status: 'failed',
+          code: 'FACE_NOT_DETECTED',
           mode: input.mode,
           message: '未检测到清晰人脸，请重新上传后再使用民族变装。',
         })
@@ -719,12 +869,23 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
   }
 
   // 机审：用户输入的图片（换装照片/年画线稿等）过审后才允许发起创作任务
+  const inputAuditContentId = `input-${imageFingerprint.slice(0, 32)}`
   const inputAudit = await checkContent({
     kind: 'picture',
     content: imageUrl,
-    contentId: jobId,
+    contentId: inputAuditContentId,
     description: `${input.mode} 创作输入图片`,
   })
+  if (inputAudit.pending) {
+    await cleanupUpload(request)
+    return response.status(202).json({
+      status: 'running',
+      code: 'CONTENT_AUDIT_PENDING',
+      auditId: inputAudit.dataId,
+      mode: input.mode,
+      message: '图片已提交审核，请稍后重新发送。',
+    })
+  }
   if (!inputAudit.passed) {
     await cleanupUpload(request)
     if (isAuditServiceUnavailable(inputAudit)) {
@@ -745,7 +906,7 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     })
   }
 
-  jobs.set(jobId, {
+  registerJob(jobId, {
     status: 'queued',
     progress: 18,
     mode: input.mode,
@@ -754,6 +915,8 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     message: '任务已受理，正在准备素材...',
     updatedAt: Date.now(),
     inputImageUrl: imageUrl,
+    templateId: input.template,
+    gender: input.gender,
   })
   // 上传的临时文件交给后台任务用完再删，这里不能先清理
   void runCreateJob({
@@ -802,6 +965,7 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
       message: error instanceof Error ? error.message : '图片内容无法识别，请重新上传。',
     })
   }
+  const imageFingerprint = crypto.createHash('sha256').update(await readFile(request.file.path)).digest('hex')
 
   if (input.mode === 'costume') {
     try {
@@ -810,6 +974,7 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
         await cleanupUpload(request)
         return response.status(422).json({
           status: 'failed',
+          code: 'FACE_NOT_DETECTED',
           mode: input.mode,
           message: '未检测到清晰人脸，请重新上传后再使用民族变装。',
         })
@@ -843,12 +1008,22 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
   }
   await cleanupUpload(request)
 
+  const inputAuditContentId = `input-${imageFingerprint.slice(0, 32)}`
   const inputAudit = await checkContent({
     kind: 'picture',
     content: imageUrl,
-    contentId: `prepare-${crypto.randomUUID()}`,
+    contentId: inputAuditContentId,
     description: `${input.mode} 创作输入图片`,
   })
+  if (inputAudit.pending) {
+    return response.status(202).json({
+      status: 'running',
+      code: 'CONTENT_AUDIT_PENDING',
+      auditId: inputAudit.dataId,
+      mode: input.mode,
+      message: '图片已提交审核，请稍后重新发送。',
+    })
+  }
   if (!inputAudit.passed) {
     if (isAuditServiceUnavailable(inputAudit)) {
       return response.status(503).json({
@@ -930,7 +1105,7 @@ app.post('/api/create/start', async (request, response) => {
   updateMiguTokenTaskState(jobId, 'pre_deducted')
   updateMiguTokenSettlement(jobId, 'pending')
   const templateTitle = input.templateTitle || styleCheck.templateTitle
-  jobs.set(jobId, {
+  registerJob(jobId, {
     status: 'queued',
     progress: 18,
     mode: input.mode,
@@ -939,6 +1114,8 @@ app.post('/api/create/start', async (request, response) => {
     message: '任务已受理，正在准备素材...',
     updatedAt: Date.now(),
     inputImageUrl: input.imageUrl,
+    templateId: input.template,
+    gender: input.gender,
     miguTaskId: input.taskId,
     miguOtoken: input.otoken,
     tokenSettlementStatus: 'pending',
@@ -1013,6 +1190,22 @@ app.get('/api/tasks/:taskId', async (request, response) => {
         })
       }
       templateTitle = job.templateTitle
+      if (job.auditDataId) {
+        const audit = findStoredAudit(job.auditDataId)
+        const auditLabel = audit?.status === 'FAILED' || audit?.label === 'FAILED' ? 'FAILED' : audit?.label || audit?.status
+        if (audit && ['NORMAL', 'REJECT', 'REVIEW', 'FAILED'].includes(auditLabel)) {
+          updateJob(taskId, { auditDataId: '' })
+        } else {
+          return response.json({
+            taskId,
+            status: 'running',
+            progress: Math.max(Number(job.progress) || 0, 88),
+            mode: job.mode,
+            templateTitle,
+            message: '视频已生成，正在等待内容审核结果...',
+          })
+        }
+      }
       if (!job.arkTaskId) {
         if (job.status === 'failed') await settleTokenOutcomeIfNeeded(taskId, 'failure', {})
         return response.json({
@@ -1064,6 +1257,24 @@ app.get('/api/tasks/:taskId', async (request, response) => {
       message: `任务仍在处理中，状态查询暂时失败，将自动重试。${message ? `（${message}）` : ''}`,
     })
   }
+})
+
+app.get('/api/audits/:dataId', (request, response) => {
+  const dataId = String(request.params.dataId || '')
+  if (!/^[\w-]{1,128}$/.test(dataId)) {
+    return response.status(400).json({ status: 'failed', message: '审核编号格式不正确。' })
+  }
+  const audit = findStoredAudit(dataId)
+  if (!audit) return response.status(404).json({ status: 'failed', message: '未找到审核记录。' })
+  const label = audit.status === 'FAILED' || audit.label === 'FAILED' ? 'FAILED' : audit.label || audit.status || 'PROCESSING'
+  const terminal = ['NORMAL', 'REJECT', 'REVIEW', 'FAILED'].includes(label)
+  return response.json({
+    status: terminal ? 'completed' : 'running',
+    auditId: dataId,
+    label,
+    passed: terminal ? label === 'NORMAL' : undefined,
+    unavailable: terminal ? label === 'FAILED' : undefined,
+  })
 })
 
 async function loadPosterSourceVideo(request, videoUrl) {
@@ -1139,6 +1350,13 @@ async function cleanupUpload(request) {
 // 统一的 JSON 错误响应，覆盖 multer 的文件大小/类型错误，避免返回 HTML 错误页。
 app.use((error, request, response, _next) => {
   void cleanupUpload(request)
+  if (error?.status === 416 || error?.statusCode === 416) {
+    return response.status(416).json({
+      status: 'failed',
+      code: 'VIDEO_RANGE_NOT_SATISFIABLE',
+      message: '视频缓存版本已更新，请刷新页面后重试。',
+    })
+  }
   if (error instanceof multer.MulterError) {
     const message =
       error.code === 'LIMIT_FILE_SIZE' ? '图片超过 12MB 大小限制，请压缩后重试。' : `图片上传失败：${error.message}`
@@ -1153,6 +1371,9 @@ app.use((error, request, response, _next) => {
 const port = Number(process.env.PORT || process.env.API_PORT || 8790)
 const httpServer = app.listen(port, () => {
   console.log(`AI Yitu Zhenying API running at http://localhost:${port}`)
+  resumeStoredJobs()
+  resumePendingSettlements()
+  void refreshStoredArkJobs()
 })
 
 let shuttingDown = false
@@ -1165,6 +1386,8 @@ async function shutdownGracefully(signal) {
   const settlements = []
   for (const [jobId, job] of jobs) {
     if (!job.miguTaskId || job.tokenSettlementStatus === 'settled') continue
+    // 生成中的任务已经持久化，进程退出时不能误报失败；新进程会继续查询火山并最终结算。
+    if (!['succeeded', 'failed'].includes(job.status)) continue
     const outcome = job.status === 'succeeded' ? 'success' : 'failure'
     settlements.push(settleTokenOutcomeIfNeeded(jobId, outcome, { videoUrl: job.resultVideoUrl }))
   }

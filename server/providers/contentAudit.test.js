@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
+import path from 'node:path'
 import test from 'node:test'
-import { checkContent, encryptAuditUrl, isAuditServiceUnavailable } from './contentAudit.js'
+import { tmpdir } from 'node:os'
+
+process.env.AUDIT_DB_PATH = path.join(tmpdir(), `content-audit-${process.pid}.db`)
+const { checkContent, encryptAuditUrl, handleAuditCallback, isAuditServiceUnavailable } = await import('./contentAudit.js')
 
 test('encrypts media URLs with the official AES-CBC parameters', () => {
   const previousAppKey = process.env.AUDIT_APP_KEY
@@ -127,6 +131,84 @@ test('times out a stalled audit HTTP request without leaking a rejected callback
     restoreEnv('AUDIT_ACCOUNT', previous.account)
     restoreEnv('AUDIT_APP_KEY', previous.appKey)
     restoreEnv('AUDIT_TIMEOUT_MS', previous.timeout)
+    globalThis.fetch = previous.fetch
+  }
+})
+
+test('restores a PROCESSING audit from a late callback without submitting it twice', async () => {
+  const previous = {
+    baseUrl: process.env.AUDIT_API_BASE_URL,
+    account: process.env.AUDIT_ACCOUNT,
+    appKey: process.env.AUDIT_APP_KEY,
+    fetch: globalThis.fetch,
+  }
+  process.env.AUDIT_API_BASE_URL = 'https://audit.example.test'
+  process.env.AUDIT_ACCOUNT = 'test-account'
+  process.env.AUDIT_APP_KEY = '1234567890abcdef'
+  let fetchCount = 0
+  globalThis.fetch = async () => {
+    fetchCount += 1
+    return new Response(
+      JSON.stringify({ code: '000000', data: [{ dataId: 'late-audit-id', status: 'PROCESSING' }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  try {
+    const pending = await checkContent({
+      kind: 'picture',
+      content: 'https://example.test/late.jpg',
+      contentId: 'late-audit-content',
+      description: 'late callback regression test',
+    })
+    assert.equal(pending.pending, true)
+    assert.equal(fetchCount, 1)
+    assert.equal(handleAuditCallback({ dataId: 'late-audit-id', status: 'NORMAL', label: 'NORMAL' }), 1)
+
+    const completed = await checkContent({
+      kind: 'picture',
+      content: 'https://example.test/late.jpg',
+      contentId: 'late-audit-content',
+      description: 'late callback regression test',
+    })
+    assert.equal(completed.passed, true)
+    assert.equal(fetchCount, 1)
+  } finally {
+    restoreEnv('AUDIT_API_BASE_URL', previous.baseUrl)
+    restoreEnv('AUDIT_ACCOUNT', previous.account)
+    restoreEnv('AUDIT_APP_KEY', previous.appKey)
+    globalThis.fetch = previous.fetch
+  }
+})
+
+test('classifies provider FAILED as unavailable instead of a content rejection', async () => {
+  const previous = {
+    baseUrl: process.env.AUDIT_API_BASE_URL,
+    account: process.env.AUDIT_ACCOUNT,
+    appKey: process.env.AUDIT_APP_KEY,
+    fetch: globalThis.fetch,
+  }
+  process.env.AUDIT_API_BASE_URL = 'https://audit.example.test'
+  process.env.AUDIT_ACCOUNT = 'test-account'
+  process.env.AUDIT_APP_KEY = '1234567890abcdef'
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ code: '000000', data: [{ dataId: 'failed-audit-id', status: 'FAILED' }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  try {
+    const result = await checkContent({
+      kind: 'picture',
+      content: 'https://example.test/failed.jpg',
+      contentId: 'failed-audit-content',
+      description: 'failed audit regression test',
+    })
+    assert.equal(result.passed, false)
+    assert.equal(isAuditServiceUnavailable(result), true)
+  } finally {
+    restoreEnv('AUDIT_API_BASE_URL', previous.baseUrl)
+    restoreEnv('AUDIT_ACCOUNT', previous.account)
+    restoreEnv('AUDIT_APP_KEY', previous.appKey)
     globalThis.fetch = previous.fetch
   }
 })
