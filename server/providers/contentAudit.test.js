@@ -4,7 +4,14 @@ import test from 'node:test'
 import { tmpdir } from 'node:os'
 
 process.env.AUDIT_DB_PATH = path.join(tmpdir(), `content-audit-${process.pid}.db`)
-const { checkContent, encryptAuditUrl, handleAuditCallback, isAuditServiceUnavailable } = await import('./contentAudit.js')
+const { checkContent, classifyStoredAudit, encryptAuditUrl, handleAuditCallback, isAuditServiceUnavailable } = await import('./contentAudit.js')
+
+test('classifies persisted callback states without treating provider failures as content rejection', () => {
+  assert.deepEqual(classifyStoredAudit(null), { state: 'pending', label: 'PROCESSING' })
+  assert.deepEqual(classifyStoredAudit({ status: 'SUCCESS', label: 'NORMAL' }), { state: 'passed', label: 'NORMAL' })
+  assert.deepEqual(classifyStoredAudit({ status: 'SUCCESS', label: 'REJECT' }), { state: 'rejected', label: 'REJECT' })
+  assert.deepEqual(classifyStoredAudit({ status: 'FAILED', label: '' }), { state: 'unavailable', label: 'FAILED' })
+})
 
 test('encrypts media URLs with the official AES-CBC parameters', () => {
   const previousAppKey = process.env.AUDIT_APP_KEY

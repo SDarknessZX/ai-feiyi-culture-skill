@@ -23,6 +23,8 @@ export function createJobStore(dbPath = path.join(dataDir, 'jobs.db')) {
       gender TEXT NOT NULL DEFAULT 'female',
       ark_task_id TEXT NOT NULL DEFAULT '',
       audit_data_id TEXT NOT NULL DEFAULT '',
+      linked_job_id TEXT NOT NULL DEFAULT '',
+      error_code TEXT NOT NULL DEFAULT '',
       message TEXT NOT NULL DEFAULT '',
       input_image_url TEXT NOT NULL DEFAULT '',
       result_video_url TEXT NOT NULL DEFAULT '',
@@ -40,6 +42,16 @@ export function createJobStore(dbPath = path.join(dataDir, 'jobs.db')) {
   } catch {
     // 新库或旧库已经存在该字段。
   }
+  try {
+    db.exec("ALTER TABLE creation_jobs ADD COLUMN linked_job_id TEXT NOT NULL DEFAULT ''")
+  } catch {
+    // 新库或旧库已经存在该字段。
+  }
+  try {
+    db.exec("ALTER TABLE creation_jobs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''")
+  } catch {
+    // 新库或旧库已经存在该字段。
+  }
   if (dbPath !== ':memory:') {
     try {
       chmodSync(dbPath, 0o600)
@@ -50,10 +62,10 @@ export function createJobStore(dbPath = path.join(dataDir, 'jobs.db')) {
 
   const upsert = db.prepare(`
     INSERT INTO creation_jobs (
-      job_id, status, progress, mode, template_id, template_title, gender, ark_task_id, audit_data_id,
+      job_id, status, progress, mode, template_id, template_title, gender, ark_task_id, audit_data_id, linked_job_id, error_code,
       message, input_image_url, result_video_url, migu_task_id, migu_otoken,
       token_settlement_status, token_settlement_outcome, medium_results_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(job_id) DO UPDATE SET
       status = excluded.status,
       progress = excluded.progress,
@@ -63,6 +75,8 @@ export function createJobStore(dbPath = path.join(dataDir, 'jobs.db')) {
       gender = excluded.gender,
       ark_task_id = excluded.ark_task_id,
       audit_data_id = excluded.audit_data_id,
+      linked_job_id = excluded.linked_job_id,
+      error_code = excluded.error_code,
       message = excluded.message,
       input_image_url = excluded.input_image_url,
       result_video_url = excluded.result_video_url,
@@ -91,6 +105,8 @@ export function createJobStore(dbPath = path.join(dataDir, 'jobs.db')) {
       job.gender || 'female',
       job.arkTaskId || '',
       job.auditDataId || '',
+      job.linkedJobId || '',
+      job.code || '',
       job.message || '',
       job.inputImageUrl || '',
       job.resultVideoUrl || '',
@@ -138,6 +154,8 @@ function fromRow(row) {
     gender: row.gender || 'female',
     arkTaskId: row.ark_task_id,
     auditDataId: row.audit_data_id,
+    linkedJobId: row.linked_job_id,
+    code: row.error_code,
     message: row.message,
     inputImageUrl: row.input_image_url,
     resultVideoUrl: row.result_video_url,

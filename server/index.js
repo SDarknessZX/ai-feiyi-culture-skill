@@ -25,6 +25,7 @@ import {
 } from './providers/arkVideo.js'
 import {
   checkContent,
+  classifyStoredAudit,
   getContentAuditConfigReport,
   handleAuditCallback,
   isAuditServiceUnavailable,
@@ -115,7 +116,9 @@ const maxPosterSourceBytes = 60 * 1024 * 1024
 const jobTtlMs = 7 * 24 * 60 * 60 * 1000
 const jobs = new Map(loadStoredJobs(Date.now() - jobTtlMs))
 const jobFinalizationPromises = new Map()
+const preparationStartPromises = new Map()
 const resumedJobIds = new Set()
+let storedArkRefreshPromise = null
 
 function registerJob(jobId, job) {
   const now = Date.now()
@@ -204,6 +207,77 @@ async function runCreateJob({ jobId, mode, gender, style, file, imageUrl }) {
   }
 }
 
+function continueAwaitingInputAudit(jobId) {
+  const job = jobs.get(jobId)
+  if (!job || job.status !== 'awaiting_input_audit') return job
+
+  const decision = classifyStoredAudit(findStoredAudit(job.auditDataId))
+  if (decision.state === 'pending') return job
+  if (decision.state === 'unavailable') {
+    updateJob(jobId, {
+      status: 'failed',
+      progress: 100,
+      code: 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE',
+      message: '内容审核服务处理失败，请稍后重试；本次并非判定为内容违规。',
+    })
+    return jobs.get(jobId)
+  }
+  if (decision.state === 'rejected') {
+    updateJob(jobId, {
+      status: 'failed',
+      progress: 100,
+      code: 'CONTENT_AUDIT_REJECTED',
+      message: `图片未通过内容审核，请修改后重试（审核编号：${job.auditDataId}）`,
+    })
+    return jobs.get(jobId)
+  }
+
+  if (jobId.startsWith('prep-')) {
+    updateJob(jobId, {
+      status: 'prepared',
+      progress: 100,
+      auditDataId: '',
+      code: '',
+      message: '素材审核通过，可以继续创作。',
+    })
+    return jobs.get(jobId)
+  }
+
+  const styleCheck = resolveStyle(job.mode, job.templateId)
+  if (styleCheck.error || !job.inputImageUrl) {
+    updateJob(jobId, {
+      status: 'failed',
+      progress: 100,
+      code: styleCheck.error?.code || 'CREATION_RESUME_FAILED',
+      message: styleCheck.error?.message || '任务恢复失败：缺少原始素材地址。',
+    })
+    return jobs.get(jobId)
+  }
+
+  updateJob(jobId, {
+    status: 'queued',
+    progress: 18,
+    auditDataId: '',
+    code: '',
+    message: '图片审核通过，正在准备素材...',
+  })
+  void runCreateJob({
+    jobId,
+    mode: job.mode,
+    gender: job.gender,
+    style: styleCheck.style,
+    file: null,
+    imageUrl: job.inputImageUrl,
+  })
+  return jobs.get(jobId)
+}
+
+function refreshAwaitingInputAudits() {
+  for (const [jobId, job] of jobs) {
+    if (job.status === 'awaiting_input_audit') continueAwaitingInputAudit(jobId)
+  }
+}
+
 function resumeStoredJobs() {
   for (const [jobId, job] of jobs) {
     if (!['queued', 'running'].includes(job.status) || job.arkTaskId || resumedJobIds.has(jobId)) continue
@@ -261,9 +335,21 @@ async function refreshStoredArkJobs() {
   )
 }
 
+function scheduleStoredArkRefresh() {
+  if (storedArkRefreshPromise) return storedArkRefreshPromise
+  storedArkRefreshPromise = refreshStoredArkJobs().finally(() => {
+    storedArkRefreshPromise = null
+  })
+  return storedArkRefreshPromise
+}
+
 setInterval(() => {
-  void refreshStoredArkJobs()
+  void scheduleStoredArkRefresh()
 }, 15_000).unref()
+
+setInterval(() => {
+  refreshAwaitingInputAudits()
+}, 3_000).unref()
 
 async function finalizeGeneratedVideo({ taskId, mode, templateTitle, generated }) {
   const data = { ...generated }
@@ -877,13 +963,30 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
     description: `${input.mode} 创作输入图片`,
   })
   if (inputAudit.pending) {
+    registerJob(jobId, {
+      status: 'awaiting_input_audit',
+      progress: 18,
+      mode: input.mode,
+      templateTitle: styleCheck.templateTitle,
+      templateId: input.template,
+      gender: input.gender,
+      arkTaskId: '',
+      auditDataId: inputAudit.dataId,
+      message: '图片已提交审核，审核通过后将自动继续创作。',
+      inputImageUrl: imageUrl,
+      updatedAt: Date.now(),
+    })
     await cleanupUpload(request)
     return response.status(202).json({
+      taskId: jobId,
       status: 'running',
+      progress: 18,
       code: 'CONTENT_AUDIT_PENDING',
       auditId: inputAudit.dataId,
       mode: input.mode,
-      message: '图片已提交审核，请稍后重新发送。',
+      templateTitle: styleCheck.templateTitle,
+      inputImageUrl: imageUrl,
+      message: '图片已提交审核，审核通过后将自动继续创作。',
     })
   }
   if (!inputAudit.passed) {
@@ -940,8 +1043,8 @@ app.post('/api/create', rateLimitCreate, upload.single('image'), async (request,
 })
 
 // Token 计费网关开启时的创作流程分两步：
-// 1) /api/create/prepare 先做人脸检测/模板校验/上传/输入机审，拿到 imageUrl 后前端才整页跳转去咪咕拿 taskId
-// 2) 跳转回来后调 /api/create/start，带上 taskId 做 Token 预扣，通过了才真正建任务
+// 1) /api/create/prepare 先做人脸检测/模板校验/上传/输入机审，并持久化 preparationId；刷新后仍可恢复
+// 2) 跳转回来后调 /api/create/start，仅凭服务端 preparationId 取已过审素材，Token 预扣通过后才真正建任务
 app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (request, response) => {
   const parsed = createSchema.safeParse(request.body)
   if (!parsed.success) {
@@ -1008,6 +1111,7 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
   }
   await cleanupUpload(request)
 
+  const preparationId = `prep-${crypto.randomUUID()}`
   const inputAuditContentId = `input-${imageFingerprint.slice(0, 32)}`
   const inputAudit = await checkContent({
     kind: 'picture',
@@ -1016,12 +1120,31 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
     description: `${input.mode} 创作输入图片`,
   })
   if (inputAudit.pending) {
+    registerJob(preparationId, {
+      status: 'awaiting_input_audit',
+      progress: 18,
+      mode: input.mode,
+      templateTitle: styleCheck.templateTitle,
+      templateId: input.template,
+      gender: input.gender,
+      arkTaskId: '',
+      auditDataId: inputAudit.dataId,
+      message: '图片已提交审核，审核通过后将自动继续。',
+      inputImageUrl: imageUrl,
+      updatedAt: Date.now(),
+    })
     return response.status(202).json({
+      preparationId,
       status: 'running',
+      progress: 18,
       code: 'CONTENT_AUDIT_PENDING',
       auditId: inputAudit.dataId,
       mode: input.mode,
-      message: '图片已提交审核，请稍后重新发送。',
+      template: input.template,
+      gender: input.gender,
+      templateTitle: styleCheck.templateTitle,
+      imageUrl,
+      message: '图片已提交审核，审核通过后将自动继续。',
     })
   }
   if (!inputAudit.passed) {
@@ -1043,7 +1166,21 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
     })
   }
 
+  registerJob(preparationId, {
+    status: 'prepared',
+    progress: 100,
+    mode: input.mode,
+    templateTitle: styleCheck.templateTitle,
+    templateId: input.template,
+    gender: input.gender,
+    arkTaskId: '',
+    auditDataId: '',
+    message: '素材审核通过，可以继续创作。',
+    inputImageUrl: imageUrl,
+    updatedAt: Date.now(),
+  })
   return response.json({
+    preparationId,
     status: 'ready',
     mode: input.mode,
     template: input.template,
@@ -1053,12 +1190,66 @@ app.post('/api/create/prepare', rateLimitCreate, upload.single('image'), async (
   })
 })
 
+app.get('/api/create/prepare/:preparationId', (request, response) => {
+  response.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+  })
+  const preparationId = String(request.params.preparationId || '')
+  if (!/^prep-[\w-]{1,128}$/.test(preparationId)) {
+    return response.status(400).json({ status: 'failed', code: 'INVALID_PREPARATION_ID', message: '素材准备编号格式不正确。' })
+  }
+
+  let preparation = jobs.get(preparationId)
+  if (!preparation) {
+    return response.status(404).json({ status: 'failed', code: 'PREPARATION_NOT_FOUND', message: '素材准备记录不存在或已过期，请重新上传。' })
+  }
+  if (preparation.status === 'awaiting_input_audit') {
+    preparation = continueAwaitingInputAudit(preparationId) || preparation
+  }
+  if (preparation.status === 'awaiting_input_audit') {
+    return response.status(202).json({
+      preparationId,
+      status: 'running',
+      progress: preparation.progress,
+      code: 'CONTENT_AUDIT_PENDING',
+      auditId: preparation.auditDataId,
+      mode: preparation.mode,
+      template: preparation.templateId,
+      gender: preparation.gender,
+      templateTitle: preparation.templateTitle,
+      imageUrl: preparation.inputImageUrl,
+      message: preparation.message,
+    })
+  }
+  if (preparation.status === 'failed') {
+    const statusCode = preparation.code === 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE' ? 503 : 422
+    return response.status(statusCode).json({
+      preparationId,
+      status: 'failed',
+      code: preparation.code,
+      mode: preparation.mode,
+      message: preparation.message,
+    })
+  }
+  if (!['prepared', 'started'].includes(preparation.status) || !preparation.inputImageUrl) {
+    return response.status(409).json({ status: 'failed', code: 'PREPARATION_NOT_READY', message: '素材尚未准备完成，请稍后重试。' })
+  }
+
+  return response.json({
+    preparationId,
+    status: 'ready',
+    mode: preparation.mode,
+    template: preparation.templateId,
+    gender: preparation.gender,
+    templateTitle: preparation.templateTitle,
+    imageUrl: preparation.inputImageUrl,
+  })
+})
+
 const createStartSchema = z.object({
-  mode: z.enum(['costume', 'food', 'painting']),
-  template: z.string().optional().default(''),
-  gender: z.enum(['female', 'male']).optional().default('female'),
-  templateTitle: z.string().optional().default(''),
-  imageUrl: z.string().trim().min(1).max(2048),
+  preparationId: z.string().trim().regex(/^prep-[\w-]{1,128}$/),
   taskId: z.string().trim().min(1).max(128),
   otoken: z.string().trim().min(1).max(256),
 })
@@ -1069,76 +1260,125 @@ app.post('/api/create/start', async (request, response) => {
     return response.status(400).json({ status: 'failed', message: '请求参数不正确。' })
   }
   const input = parsed.data
-  const jobId = `job-${crypto.randomUUID()}`
-  recordMiguTokenTask({ jobId, miguTaskId: input.taskId, mode: input.mode })
+  let startPromise = preparationStartPromises.get(input.preparationId)
+  if (!startPromise) {
+    startPromise = startPreparedCreation(input)
+    preparationStartPromises.set(input.preparationId, startPromise)
+  }
+  try {
+    const outcome = await startPromise
+    return response.status(outcome.statusCode).json(outcome.body)
+  } finally {
+    if (preparationStartPromises.get(input.preparationId) === startPromise) preparationStartPromises.delete(input.preparationId)
+  }
+})
 
-  const styleCheck = resolveStyle(input.mode, input.template)
+async function startPreparedCreation(input) {
+  const preparation = jobs.get(input.preparationId)
+  if (!preparation) {
+    return { statusCode: 404, body: { status: 'failed', code: 'PREPARATION_NOT_FOUND', message: '素材准备记录不存在或已过期，请重新上传。' } }
+  }
+  if (preparation.status === 'awaiting_input_audit') {
+    continueAwaitingInputAudit(input.preparationId)
+  }
+  const currentPreparation = jobs.get(input.preparationId)
+  if (currentPreparation?.status === 'started' && currentPreparation.linkedJobId) {
+    const existingJob = jobs.get(currentPreparation.linkedJobId)
+    if (existingJob) {
+      return {
+        statusCode: 200,
+        body: {
+          taskId: currentPreparation.linkedJobId,
+          // 已完成任务也先按 running 返回，让前端统一查询 /api/tasks 并拿到归档视频和封面。
+          status: existingJob.status === 'failed' ? 'failed' : 'running',
+          progress: existingJob.progress,
+          ...(existingJob.code ? { code: existingJob.code } : {}),
+          mode: existingJob.mode,
+          templateTitle: existingJob.templateTitle,
+          inputImageUrl: existingJob.inputImageUrl,
+          message: existingJob.message,
+        },
+      }
+    }
+  }
+  if (currentPreparation?.status !== 'prepared' || !currentPreparation.inputImageUrl) {
+    const failed = currentPreparation?.status === 'failed'
+    return {
+      statusCode: failed ? (currentPreparation.code === 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE' ? 503 : 422) : 409,
+      body: {
+        status: 'failed',
+        code: currentPreparation?.code || 'PREPARATION_NOT_READY',
+        mode: currentPreparation?.mode,
+        message: currentPreparation?.message || '素材尚未准备完成，请稍后重试。',
+      },
+    }
+  }
+
+  const styleCheck = resolveStyle(currentPreparation.mode, currentPreparation.templateId)
   if (styleCheck.error) {
-    updateMiguTokenTaskState(jobId, 'request_rejected', styleCheck.error.message)
-    return response.status(styleCheck.status).json({ status: 'failed', mode: input.mode, ...styleCheck.error })
+    return { statusCode: styleCheck.status, body: { status: 'failed', mode: currentPreparation.mode, ...styleCheck.error } }
   }
-
-  const modelValue = getModelValueForMode(input.mode)
+  const modelValue = getModelValueForMode(currentPreparation.mode)
   if (!modelValue) {
-    const message = `未配置「${input.mode}」对应的咪咕模态值（modelValue），请检查 .env。`
-    updateMiguTokenTaskState(jobId, 'request_rejected', message)
-    return response.status(500).json({
-      status: 'failed',
-      mode: input.mode,
-      message,
-    })
+    return {
+      statusCode: 500,
+      body: { status: 'failed', mode: currentPreparation.mode, message: `未配置「${currentPreparation.mode}」对应的咪咕模态值（modelValue），请检查 .env。` },
+    }
   }
 
+  const jobId = `job-${crypto.randomUUID()}`
+  recordMiguTokenTask({ jobId, miguTaskId: input.taskId, mode: currentPreparation.mode })
   try {
     await preDeductToken({ otoken: input.otoken, taskId: input.taskId, contentType: 'video', modelValue })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Token 权益不足或校验失败，请稍后重试。'
     updateMiguTokenTaskState(jobId, 'reduce_failed', message)
-    return response.status(402).json({
-      status: 'failed',
-      code: error?.code || 'TOKEN_PREDEDUCT_FAILED',
-      mode: input.mode,
-      message,
-    })
+    return {
+      statusCode: 402,
+      body: { status: 'failed', code: error?.code || 'TOKEN_PREDEDUCT_FAILED', mode: currentPreparation.mode, message },
+    }
   }
 
   updateMiguTokenTaskState(jobId, 'pre_deducted')
   updateMiguTokenSettlement(jobId, 'pending')
-  const templateTitle = input.templateTitle || styleCheck.templateTitle
   registerJob(jobId, {
     status: 'queued',
     progress: 18,
-    mode: input.mode,
-    templateTitle,
+    mode: currentPreparation.mode,
+    templateTitle: currentPreparation.templateTitle || styleCheck.templateTitle,
     arkTaskId: '',
     message: '任务已受理，正在准备素材...',
     updatedAt: Date.now(),
-    inputImageUrl: input.imageUrl,
-    templateId: input.template,
-    gender: input.gender,
+    inputImageUrl: currentPreparation.inputImageUrl,
+    templateId: currentPreparation.templateId,
+    gender: currentPreparation.gender,
     miguTaskId: input.taskId,
     miguOtoken: input.otoken,
     tokenSettlementStatus: 'pending',
   })
+  updateJob(input.preparationId, { status: 'started', linkedJobId: jobId, message: '创作任务已创建。' })
   void runCreateJob({
     jobId,
-    mode: input.mode,
-    gender: input.gender,
+    mode: currentPreparation.mode,
+    gender: currentPreparation.gender,
     style: styleCheck.style,
     file: null,
-    imageUrl: input.imageUrl,
+    imageUrl: currentPreparation.inputImageUrl,
   })
 
-  return response.json({
-    taskId: jobId,
-    status: 'queued',
-    progress: 18,
-    mode: input.mode,
-    templateTitle,
-    inputImageUrl: input.imageUrl,
-    message: '任务已受理，正在后台处理，请稍候。',
-  })
-})
+  return {
+    statusCode: 200,
+    body: {
+      taskId: jobId,
+      status: 'queued',
+      progress: 18,
+      mode: currentPreparation.mode,
+      templateTitle: currentPreparation.templateTitle || styleCheck.templateTitle,
+      inputImageUrl: currentPreparation.inputImageUrl,
+      message: '任务已受理，正在后台处理，请稍候。',
+    },
+  }
+}
 
 app.get('/api/tasks/:taskId', async (request, response) => {
   response.set({
@@ -1180,7 +1420,7 @@ app.get('/api/tasks/:taskId', async (request, response) => {
     let templateTitle
 
     if (taskId.startsWith('job-')) {
-      const job = jobs.get(taskId)
+      let job = jobs.get(taskId)
       if (!job) {
         return response.json({
           taskId,
@@ -1190,10 +1430,25 @@ app.get('/api/tasks/:taskId', async (request, response) => {
         })
       }
       templateTitle = job.templateTitle
+      if (job.status === 'awaiting_input_audit') {
+        job = continueAwaitingInputAudit(taskId) || job
+        if (job.status === 'awaiting_input_audit') {
+          return response.json({
+            taskId,
+            status: 'running',
+            progress: job.progress,
+            code: 'CONTENT_AUDIT_PENDING',
+            auditId: job.auditDataId,
+            mode: job.mode,
+            templateTitle,
+            inputImageUrl: job.inputImageUrl,
+            message: job.message,
+          })
+        }
+      }
       if (job.auditDataId) {
-        const audit = findStoredAudit(job.auditDataId)
-        const auditLabel = audit?.status === 'FAILED' || audit?.label === 'FAILED' ? 'FAILED' : audit?.label || audit?.status
-        if (audit && ['NORMAL', 'REJECT', 'REVIEW', 'FAILED'].includes(auditLabel)) {
+        const auditDecision = classifyStoredAudit(findStoredAudit(job.auditDataId))
+        if (auditDecision.state !== 'pending') {
           updateJob(taskId, { auditDataId: '' })
         } else {
           return response.json({
@@ -1212,8 +1467,10 @@ app.get('/api/tasks/:taskId', async (request, response) => {
           taskId,
           status: job.status === 'failed' ? 'failed' : 'running',
           progress: job.status === 'failed' ? 100 : job.progress,
+          ...(job.code ? { code: job.code } : {}),
           mode: job.mode,
           templateTitle,
+          inputImageUrl: job.inputImageUrl,
           message: job.message,
         })
       }
@@ -1266,14 +1523,14 @@ app.get('/api/audits/:dataId', (request, response) => {
   }
   const audit = findStoredAudit(dataId)
   if (!audit) return response.status(404).json({ status: 'failed', message: '未找到审核记录。' })
-  const label = audit.status === 'FAILED' || audit.label === 'FAILED' ? 'FAILED' : audit.label || audit.status || 'PROCESSING'
-  const terminal = ['NORMAL', 'REJECT', 'REVIEW', 'FAILED'].includes(label)
+  const decision = classifyStoredAudit(audit)
+  const terminal = decision.state !== 'pending'
   return response.json({
     status: terminal ? 'completed' : 'running',
     auditId: dataId,
-    label,
-    passed: terminal ? label === 'NORMAL' : undefined,
-    unavailable: terminal ? label === 'FAILED' : undefined,
+    label: decision.label,
+    passed: terminal ? decision.state === 'passed' : undefined,
+    unavailable: terminal ? decision.state === 'unavailable' : undefined,
   })
 })
 
@@ -1372,8 +1629,9 @@ const port = Number(process.env.PORT || process.env.API_PORT || 8790)
 const httpServer = app.listen(port, () => {
   console.log(`AI Yitu Zhenying API running at http://localhost:${port}`)
   resumeStoredJobs()
+  refreshAwaitingInputAudits()
   resumePendingSettlements()
-  void refreshStoredArkJobs()
+  void scheduleStoredArkRefresh()
 })
 
 let shuttingDown = false

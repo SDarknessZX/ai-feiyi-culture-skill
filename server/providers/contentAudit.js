@@ -123,6 +123,15 @@ function normalizeAuditResult(result) {
   }
 }
 
+export function classifyStoredAudit(audit) {
+  if (!audit) return { state: 'pending', label: 'PROCESSING' }
+  const label = audit.status === 'FAILED' || audit.label === 'FAILED' ? 'FAILED' : audit.label || audit.status || 'PROCESSING'
+  if (label === 'NORMAL') return { state: 'passed', label }
+  if (label === 'FAILED') return { state: 'unavailable', label }
+  if (label === 'REJECT' || label === 'REVIEW') return { state: 'rejected', label }
+  return { state: 'pending', label }
+}
+
 function isFinalResult(kind, result) {
   if (kind === 'text') return FINAL_TEXT_STATUSES.has(result.status)
   return FINAL_MEDIA_STATUSES.has(result.status)

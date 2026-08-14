@@ -74,11 +74,32 @@ type ModeDraft = {
 
 // Token 计费网关开启时，整页跳转去咪咕拿 taskId 之前，先把这次创作请求存起来，跳转回来后续用
 type PendingCreation = {
+  preparationId: string
   mode: ModeId
   template: string
   gender: GenderId
   templateTitle: string
   imageUrl: string
+}
+
+type PreparedCreationResponse = {
+  preparationId?: string
+  status?: string
+  code?: string
+  auditId?: string
+  message?: string
+  mode?: ModeId
+  template?: string
+  gender?: GenderId
+  templateTitle?: string
+  imageUrl?: string
+  progress?: number
+}
+
+type PendingPreparation = {
+  preparationId: string
+  mode: ModeId
+  createdAt: number
 }
 
 type CreationOverrides = {
@@ -152,6 +173,7 @@ type ChatMessage = {
   role: 'user' | 'assistant'
   text: string
   imageUrl?: string
+  mode?: ModeId
   loading?: boolean
   createdAt: number
 }
@@ -210,6 +232,7 @@ const miguPendingLoginActionKey = 'ai-yitu-zhenying-migu-pending-login-action'
 // btoken 官方有效期 1 小时，这里留一点余量提前判过期，避免临界点上用过期 token 发请求
 const miguSessionTtlMs = 55 * 60 * 1000
 const pendingCreationStorageKey = 'ai-yitu-zhenying-migu-pending-creation'
+const pendingPreparationStorageKey = 'ai-yitu-zhenying-migu-pending-preparation-v1'
 const miguTaskIdPendingKey = 'ai-yitu-zhenying-migu-taskid-pending'
 const serviceProviderName = import.meta.env.VITE_SERVICE_PROVIDER_NAME?.trim() || '深圳市普威德科技有限公司'
 const privacyPolicyUrl =
@@ -466,9 +489,36 @@ const chatTopics = [
 
 const usageNoticeTitle = 'AI应用照片采集使用须知'
 
+type StorageKind = 'localStorage' | 'sessionStorage'
+
+function readStorage(kind: StorageKind, key: string) {
+  try {
+    return window[kind].getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStorage(kind: StorageKind, key: string, value: string) {
+  try {
+    window[kind].setItem(key, value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function removeStorage(kind: StorageKind, key: string) {
+  try {
+    window[kind].removeItem(key)
+  } catch {
+    // 嵌入式 WebView 可能禁用存储；清理失败不应阻断当前点击动作。
+  }
+}
+
 function loadPendingTasks(): Partial<Record<ModeId, CreateResult>> {
   try {
-    const raw = window.localStorage.getItem(pendingStorageKey)
+    const raw = readStorage('localStorage', pendingStorageKey)
     if (!raw) return {}
     const parsed = JSON.parse(raw) as Partial<Record<ModeId, CreateResult>>
     return parsed && typeof parsed === 'object' ? parsed : {}
@@ -479,7 +529,7 @@ function loadPendingTasks(): Partial<Record<ModeId, CreateResult>> {
 
 function loadChatMessages(): ChatMessage[] {
   try {
-    const raw = window.localStorage.getItem(chatMessagesStorageKey)
+    const raw = readStorage('localStorage', chatMessagesStorageKey)
     if (!raw) return []
     const parsed = JSON.parse(raw) as Partial<ChatMessage>[]
     if (!Array.isArray(parsed)) return []
@@ -491,6 +541,7 @@ function loadChatMessages(): ChatMessage[] {
         role: item.role!,
         text: item.text!,
         imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : undefined,
+        mode: ['costume', 'food', 'painting'].includes(String(item.mode)) ? (item.mode as ModeId) : undefined,
         loading: Boolean(item.loading),
         createdAt: Number.isFinite(item.createdAt) ? Number(item.createdAt) : fallbackStamp + index,
       }))
@@ -502,7 +553,7 @@ function loadChatMessages(): ChatMessage[] {
 
 function loadChatHistory(): ChatResultHistoryItem[] {
   try {
-    const raw = window.localStorage.getItem(chatHistoryStorageKey)
+    const raw = readStorage('localStorage', chatHistoryStorageKey)
     if (!raw) return []
     const parsed = JSON.parse(raw) as Partial<ChatResultHistoryItem>[]
     if (!Array.isArray(parsed)) return []
@@ -531,13 +582,45 @@ function loadChatHistory(): ChatResultHistoryItem[] {
 function savePendingTask(mode: ModeId, task: CreateResult) {
   const pending = loadPendingTasks()
   pending[mode] = mergeTaskProgress(pending[mode], task)
-  window.localStorage.setItem(pendingStorageKey, JSON.stringify(pending))
+  writeStorage('localStorage', pendingStorageKey, JSON.stringify(pending))
 }
 
 function clearPendingTask(mode: ModeId) {
   const pending = loadPendingTasks()
   delete pending[mode]
-  window.localStorage.setItem(pendingStorageKey, JSON.stringify(pending))
+  writeStorage('localStorage', pendingStorageKey, JSON.stringify(pending))
+}
+
+function loadPendingPreparation(): PendingPreparation | null {
+  try {
+    const raw = readStorage('localStorage', pendingPreparationStorageKey)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<PendingPreparation>
+    if (!parsed.preparationId || !['costume', 'food', 'painting'].includes(String(parsed.mode))) return null
+    return {
+      preparationId: parsed.preparationId,
+      mode: parsed.mode as ModeId,
+      createdAt: Number(parsed.createdAt) || Date.now(),
+    }
+  } catch {
+    return null
+  }
+}
+
+function savePendingPreparation(preparation: PendingPreparation) {
+  try {
+    writeStorage('localStorage', pendingPreparationStorageKey, JSON.stringify(preparation))
+  } catch {
+    // WebView 禁用持久化时仍继续当前页面内的流程。
+  }
+}
+
+function clearPendingPreparation() {
+  try {
+    removeStorage('localStorage', pendingPreparationStorageKey)
+  } catch {
+    // 忽略受限 WebView 的存储异常。
+  }
 }
 
 type MiguSession = {
@@ -553,7 +636,7 @@ type MiguSession = {
 
 function readMiguSession(): MiguSession | null {
   try {
-    const raw = window.localStorage.getItem(miguSessionStorageKey)
+    const raw = readStorage('localStorage', miguSessionStorageKey)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<MiguSession>
     // 文档以 btoken 作为登录成功凭据；vuid 有则使用，没有也不能把成功登录误判成失败。
@@ -570,13 +653,13 @@ function hasValidMiguSession(): boolean {
 }
 
 function savePendingLoginAction(action: PendingLoginAction) {
-  window.sessionStorage.setItem(miguPendingLoginActionKey, JSON.stringify(action))
+  writeStorage('sessionStorage', miguPendingLoginActionKey, JSON.stringify(action))
 }
 
 function takePendingLoginAction(): PendingLoginAction | null {
-  const raw = window.sessionStorage.getItem(miguPendingLoginActionKey)
+  const raw = readStorage('sessionStorage', miguPendingLoginActionKey)
   if (!raw) return null
-  window.sessionStorage.removeItem(miguPendingLoginActionKey)
+  removeStorage('sessionStorage', miguPendingLoginActionKey)
   try {
     const action = JSON.parse(raw) as PendingLoginAction
     if (action.kind === 'upload') return action
@@ -610,7 +693,7 @@ function App() {
   const [costumeStyle, setCostumeStyle] = useState('ethnic-miao')
   const [paintingStyle, setPaintingStyle] = useState(paintingStyles[0].id)
   const [foodShowcase, setFoodShowcase] = useState('茶点')
-  const [acceptedAgreement, setAcceptedAgreement] = useState(() => window.localStorage.getItem(usageAcceptedStorageKey) === 'true')
+  const [acceptedAgreement, setAcceptedAgreement] = useState(() => readStorage('localStorage', usageAcceptedStorageKey) === 'true')
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
     const search = new URLSearchParams(window.location.search)
     if (search.get('btoken')) return true
@@ -635,13 +718,13 @@ function App() {
   const [uploadSource, setUploadSource] = useState<UploadSource>('gallery')
   const [cameraPermissionGranted, setCameraPermissionGranted] = useState(
     () =>
-      window.localStorage.getItem(cameraPermissionStorageKey) === 'true' ||
-      window.localStorage.getItem(mediaPermissionStorageKey) === 'true',
+      readStorage('localStorage', cameraPermissionStorageKey) === 'true' ||
+      readStorage('localStorage', mediaPermissionStorageKey) === 'true',
   )
   const [galleryPermissionGranted, setGalleryPermissionGranted] = useState(
     () =>
-      window.localStorage.getItem(galleryPermissionStorageKey) === 'true' ||
-      window.localStorage.getItem(mediaPermissionStorageKey) === 'true',
+      readStorage('localStorage', galleryPermissionStorageKey) === 'true' ||
+      readStorage('localStorage', mediaPermissionStorageKey) === 'true',
   )
   const [imageReviewing, setImageReviewing] = useState(false)
   const [faceReviewing, setFaceReviewing] = useState(false)
@@ -669,6 +752,7 @@ function App() {
   const pollingTaskIdsRef = useRef(new Set<string>())
   const sampleRequestVersionRef = useRef<Record<ModeId, number>>({ costume: 0, food: 0, painting: 0 })
   const pendingRefreshInFlightRef = useRef<Promise<void> | null>(null)
+  const pendingPreparationResumeRef = useRef(false)
   // 咱们的 jobId -> 咪咕 taskId，创作完成事件上报要用，跨 pollTask 的多轮请求持续存在
   const miguTaskIdByJobRef = useRef<Record<string, string>>({})
 
@@ -709,13 +793,19 @@ function App() {
   }, [])
 
   function updateDraft(targetMode: ModeId, nextDraft: Partial<ModeDraft>) {
-    setDrafts((currentDrafts) => ({
-      ...currentDrafts,
-      [targetMode]: {
-        ...currentDrafts[targetMode],
-        ...nextDraft,
-      },
-    }))
+    setDrafts((currentDrafts) => {
+      const currentDraft = currentDrafts[targetMode]
+      const normalizedNextDraft = nextDraft.result && !nextDraft.result.createdAt
+        ? { ...nextDraft, result: { ...nextDraft.result, createdAt: currentDraft.result?.createdAt || Date.now() } }
+        : nextDraft
+      return {
+        ...currentDrafts,
+        [targetMode]: {
+          ...currentDraft,
+          ...normalizedNextDraft,
+        },
+      }
+    })
   }
 
   async function chooseSampleImage(targetMode: ModeId, sample: SampleImage): Promise<File | null> {
@@ -758,16 +848,16 @@ function App() {
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem(worksStorageKey, JSON.stringify(works))
+    writeStorage('localStorage', worksStorageKey, JSON.stringify(works))
   }, [works])
 
   useEffect(() => {
-    window.localStorage.setItem(chatMessagesStorageKey, JSON.stringify(chatMessages.filter((item) => !item.loading)))
+    writeStorage('localStorage', chatMessagesStorageKey, JSON.stringify(chatMessages.filter((item) => !item.loading)))
   }, [chatMessages])
 
   useEffect(() => {
     const serializableHistory = chatResultHistory.map(({ context: _context, ...item }) => item)
-    window.localStorage.setItem(chatHistoryStorageKey, JSON.stringify(serializableHistory))
+    writeStorage('localStorage', chatHistoryStorageKey, JSON.stringify(serializableHistory))
   }, [chatResultHistory])
 
   useEffect(() => {
@@ -827,15 +917,15 @@ function App() {
   }, [works])
 
   useEffect(() => {
-    window.localStorage.setItem(usageAcceptedStorageKey, String(acceptedAgreement))
+    writeStorage('localStorage', usageAcceptedStorageKey, String(acceptedAgreement))
   }, [acceptedAgreement])
 
   useEffect(() => {
-    window.localStorage.setItem(cameraPermissionStorageKey, String(cameraPermissionGranted))
+    writeStorage('localStorage', cameraPermissionStorageKey, String(cameraPermissionGranted))
   }, [cameraPermissionGranted])
 
   useEffect(() => {
-    window.localStorage.setItem(galleryPermissionStorageKey, String(galleryPermissionGranted))
+    writeStorage('localStorage', galleryPermissionStorageKey, String(galleryPermissionGranted))
   }, [galleryPermissionGranted])
 
   // 咪咕登录回调：cToken 由服务端调接口现取现用，不会出现在我们的 URL 里，
@@ -851,7 +941,7 @@ function App() {
     const watermarkId = search.get('watermarkId')
     const otherSet = search.get('otherSet')
     const isMiniPublish = search.get('isMiniPublish')
-    const loginWasPending = window.sessionStorage.getItem(miguLoginPendingKey) === '1'
+    const loginWasPending = readStorage('sessionStorage', miguLoginPendingKey) === '1'
     if (!btoken && !vuid && !loginToken && !loginWasPending) return
 
     // URL 登录先回传一次性 token；再交给 AIGC 登录页换取最终的 btoken/vuid。
@@ -881,8 +971,8 @@ function App() {
         } catch {
           setToast('无法连接登录服务，请重试')
         }
-        window.sessionStorage.removeItem(miguLoginPendingKey)
-        window.sessionStorage.removeItem(miguPendingLoginActionKey)
+        removeStorage('sessionStorage', miguLoginPendingKey)
+        removeStorage('sessionStorage', miguPendingLoginActionKey)
         trackAmberLogin('fail')
         trackQingyuanUserLogin('fail', {
           isInMiguApp: miguEnv.isInMiguAPP,
@@ -893,10 +983,11 @@ function App() {
     }
 
     if (loginWasPending) {
-      window.sessionStorage.removeItem(miguLoginPendingKey)
+      removeStorage('sessionStorage', miguLoginPendingKey)
     }
     if (btoken) {
-      window.localStorage.setItem(
+      writeStorage(
+        'localStorage',
         miguSessionStorageKey,
         JSON.stringify({
           btoken,
@@ -915,7 +1006,7 @@ function App() {
         trackQingyuanUserLogin('success', { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram })
       }
     } else if (loginWasPending) {
-      window.sessionStorage.removeItem(miguPendingLoginActionKey)
+      removeStorage('sessionStorage', miguPendingLoginActionKey)
       setToast('登录失败，请重试')
       trackAmberLogin('fail')
       trackQingyuanUserLogin('fail', { isInMiguApp: miguEnv.isInMiguAPP, isInMiniprogram: miguEnv.isInMiniprogram })
@@ -965,10 +1056,10 @@ function App() {
     const resumeCode = search.get('resumeCode')
     const code = search.get('code')
     const callbackInfo = search.get('info')
-    const taskIdWasPending = window.sessionStorage.getItem(miguTaskIdPendingKey) === '1'
+    const taskIdWasPending = readStorage('sessionStorage', miguTaskIdPendingKey) === '1'
     if (!taskId && !resumeCode && !code && !taskIdWasPending) return
 
-    window.sessionStorage.removeItem(miguTaskIdPendingKey)
+    removeStorage('sessionStorage', miguTaskIdPendingKey)
     search.delete('taskId')
     search.delete('resumeCode')
     search.delete('code')
@@ -976,8 +1067,8 @@ function App() {
     const nextQuery = search.toString()
     window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash}`)
 
-    const pendingRaw = window.sessionStorage.getItem(pendingCreationStorageKey)
-    window.sessionStorage.removeItem(pendingCreationStorageKey)
+    const pendingRaw = readStorage('sessionStorage', pendingCreationStorageKey)
+    removeStorage('sessionStorage', pendingCreationStorageKey)
     const session = readMiguSession()
 
     if (code === '200002') {
@@ -1156,6 +1247,44 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!tokenGatingReady || !tokenGatingEnabled || !isLoggedIn || pendingPreparationResumeRef.current) return
+    const pending = loadPendingPreparation()
+    if (!pending) return
+    if (Date.now() - pending.createdAt > 7 * 24 * 60 * 60 * 1000) {
+      clearPendingPreparation()
+      return
+    }
+    const session = readMiguSession()
+    if (!session?.btoken) return
+
+    pendingPreparationResumeRef.current = true
+    setMode(pending.mode)
+    setChatMode(pending.mode)
+    setView('chat')
+    updateDraft(pending.mode, {
+      busy: true,
+      result: {
+        status: 'running',
+        code: 'CONTENT_AUDIT_PENDING',
+        mode: pending.mode,
+        message: '正在恢复上次未完成的图片审核...',
+        createdAt: pending.createdAt,
+      },
+    })
+    void (async () => {
+      try {
+        const prepared = await waitForPreparedCreation(pending.preparationId, pending.mode)
+        if (prepared) await continueTokenGatedPreparation(prepared, session.btoken)
+      } finally {
+        pendingPreparationResumeRef.current = false
+        updateDraft(pending.mode, { busy: false })
+      }
+    })()
+    // 函数声明会读取最新服务端状态；这里只在登录/网关状态发生变化时尝试恢复一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoggedIn, tokenGatingEnabled, tokenGatingReady])
+
   // Token 网关开启且已通过真实咪咕登录时，查询当前玩法的分贝余量，展示在顶部角标上
   useEffect(() => {
     if (!tokenGatingEnabled) {
@@ -1203,7 +1332,7 @@ function App() {
           message: nextResult.message,
           videoUrl: nextVideoUrl,
           posterUrl: nextResult.posterUrl,
-          createdAt: new Date().toISOString(),
+          createdAt: toIsoTimestamp(nextResult.createdAt),
         },
         ...currentWorks,
       ]
@@ -1357,7 +1486,7 @@ function App() {
   function prepareLoginRedirect() {
     // 原生链接直接进入同源后端，再由服务端 302 到咪咕。相比 JS location.assign，
     // 这条路径在微信 XWeb、鸿蒙 ArkWeb 以及旧版 iOS WebView 中更稳定。
-    window.sessionStorage.setItem(miguLoginPendingKey, '1')
+    writeStorage('sessionStorage', miguLoginPendingKey, '1')
   }
 
   async function openUsageDetail() {
@@ -1385,7 +1514,7 @@ function App() {
 
   function closeLoginDialog() {
     trackAmberLogin('cancel')
-    window.sessionStorage.removeItem(miguPendingLoginActionKey)
+    removeStorage('sessionStorage', miguPendingLoginActionKey)
     setShowLoginDialog(false)
     restorePreviousPanel()
   }
@@ -1717,10 +1846,22 @@ function App() {
 
   function updateCreationMessageImage(targetMode: ModeId, imageUrl: string) {
     const messageId = activeCreationContextRef.current[targetMode]?.messageId
-    if (!messageId || !imageUrl) return
-    setChatMessages((current) =>
-      current.map((message) => (message.id === messageId ? { ...message, imageUrl } : message)),
-    )
+    if (!imageUrl) return
+    setChatMessages((current) => {
+      let targetIndex = messageId ? current.findIndex((message) => message.id === messageId) : -1
+      if (targetIndex < 0) {
+        const expectedPrompt = getCreationPrompt(targetMode, templateIdFor(targetMode))
+        for (let index = current.length - 1; index >= 0; index -= 1) {
+          const message = current[index]
+          if (message.role === 'user' && (message.mode === targetMode || message.text === expectedPrompt)) {
+            targetIndex = index
+            break
+          }
+        }
+      }
+      if (targetIndex < 0) return current
+      return current.map((message, index) => (index === targetIndex ? { ...message, imageUrl, mode: targetMode } : message))
+    })
   }
 
   // 处理 /api/create 或 /api/create/start 的响应：两条路径完成后的收尾逻辑完全一样
@@ -1764,24 +1905,7 @@ function App() {
     formData.append('gender', overrides.gender || gender || 'female')
 
     try {
-      let response = await fetch('/api/create', { method: 'POST', body: formData })
-      if (response.status === 202) {
-        const pending = (await response.json()) as { auditId?: string; message?: string }
-        updateDraft(targetMode, {
-          result: {
-            status: 'running',
-            code: 'CONTENT_AUDIT_PENDING',
-            auditId: pending.auditId,
-            mode: targetMode,
-            message: pending.message || '图片正在审核中，请稍候。',
-          },
-        })
-        if (!pending.auditId || !(await waitForAudit(pending.auditId, targetMode))) {
-          updateDraft(targetMode, { busy: false })
-          return
-        }
-        response = await fetch('/api/create', { method: 'POST', body: formData })
-      }
+      const response = await fetch('/api/create', { method: 'POST', body: formData })
       await handleCreateApiResponse(targetMode, response)
     } catch {
       updateDraft(targetMode, {
@@ -1796,55 +1920,7 @@ function App() {
     }
   }
 
-  async function waitForAudit(auditId: string, targetMode: ModeId) {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      if (attempt > 0) await wait(3000)
-      try {
-        const response = await fetch(`/api/audits/${encodeURIComponent(auditId)}?_=${Date.now()}`, { cache: 'no-store' })
-        const result = (await response.json()) as { status?: string; passed?: boolean; unavailable?: boolean }
-        if (!response.ok) continue
-        if (result.status === 'completed') {
-          if (result.passed) return true
-          if (result.unavailable) {
-            updateDraft(targetMode, {
-              result: {
-                status: 'failed',
-                code: 'CONTENT_AUDIT_TEMPORARILY_UNAVAILABLE',
-                auditId,
-                mode: targetMode,
-                message: '内容审核服务处理失败，请稍后重试；本次并非判定为内容违规。',
-              },
-            })
-            return false
-          }
-          updateDraft(targetMode, {
-            result: {
-              status: 'failed',
-              code: 'CONTENT_AUDIT_REJECTED',
-              auditId,
-              mode: targetMode,
-              message: `图片未通过内容审核（审核编号：${auditId}）`,
-            },
-          })
-          return false
-        }
-      } catch {
-        // 短暂网络错误继续轮询，审核记录已经保存在服务端。
-      }
-    }
-    updateDraft(targetMode, {
-      result: {
-        status: 'failed',
-        code: 'CONTENT_AUDIT_PENDING',
-        auditId,
-        mode: targetMode,
-        message: '图片审核仍在处理中，请稍后重新发送；系统会复用本次审核结果。',
-      },
-    })
-    return false
-  }
-
-  // Token 网关开着时：先上传+机审拿 imageUrl，存好待提交状态，再整页跳转去咪咕拿 taskId
+  // Token 网关开着时：先上传并持久化机审准备记录，再整页跳转去咪咕拿 taskId。
   async function beginTokenGatedCreation(targetMode: ModeId, file: File, btoken: string, overrides: CreationOverrides = {}) {
     const template = overrides.templateId ?? templateIdFor(targetMode)
     const formData = new FormData()
@@ -1854,72 +1930,172 @@ function App() {
     formData.append('gender', overrides.gender || gender || 'female')
 
     try {
-      let prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
-      let prepared = (await prepareResponse.json()) as {
-        status?: string
-        code?: string
-        auditId?: string
-        message?: string
-        templateTitle?: string
-        imageUrl?: string
+      const prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
+      let prepared = (await prepareResponse.json().catch(() => ({}))) as PreparedCreationResponse
+      if (prepareResponse.status === 202 && prepared.preparationId) {
+        savePendingPreparation({ preparationId: prepared.preparationId, mode: targetMode, createdAt: Date.now() })
+        if (prepared.imageUrl) updateCreationMessageImage(targetMode, prepared.imageUrl)
+        updateDraft(targetMode, {
+          result: {
+            status: 'running',
+            mode: targetMode,
+            code: prepared.code,
+            auditId: prepared.auditId,
+            progress: prepared.progress,
+            inputImageUrl: prepared.imageUrl,
+            templateTitle: prepared.templateTitle,
+            message: prepared.message || '图片正在审核中，审核通过后将自动继续。',
+          },
+        })
+        const resumedPreparation = await waitForPreparedCreation(prepared.preparationId, targetMode)
+        if (!resumedPreparation) return
+        prepared = resumedPreparation
       }
-      if (prepareResponse.status === 202 && prepared.auditId && (await waitForAudit(prepared.auditId, targetMode))) {
-        prepareResponse = await fetch('/api/create/prepare', { method: 'POST', body: formData })
-        prepared = (await prepareResponse.json()) as typeof prepared
+      if (
+        (!prepareResponse.ok && prepareResponse.status !== 202) ||
+        prepared.status !== 'ready' ||
+        !prepared.imageUrl ||
+        !prepared.preparationId
+      ) {
+        if (prepared.status !== 'running') clearPendingPreparation()
+        updateDraft(targetMode, {
+          result: {
+            status: prepared.status === 'running' ? 'running' : 'failed',
+            mode: targetMode,
+            code: prepared.code,
+            auditId: prepared.auditId,
+            message: prepared.message || (prepared.status === 'running' ? '图片仍在审核中，稍后重新进入页面会自动继续。' : '素材准备失败，请稍后重试。'),
+          },
+        })
+        return
       }
-      if (!prepareResponse.ok || prepared.status !== 'ready' || !prepared.imageUrl) {
+      savePendingPreparation({ preparationId: prepared.preparationId, mode: targetMode, createdAt: Date.now() })
+      await continueTokenGatedPreparation(prepared, btoken)
+    } catch {
+      updateDraft(targetMode, {
+        result: { status: 'failed', mode: targetMode, message: '无法连接本地服务，请稍后重试。' },
+      })
+    }
+  }
+
+  async function waitForPreparedCreation(preparationId: string, targetMode: ModeId): Promise<PreparedCreationResponse | null> {
+    let consecutiveFailures = 0
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (attempt > 0) await wait(3000)
+      try {
+        const response = await fetch(`/api/create/prepare/${encodeURIComponent(preparationId)}?_=${Date.now()}`, { cache: 'no-store' })
+        const prepared = (await response.json().catch(() => ({}))) as PreparedCreationResponse
+        consecutiveFailures = 0
+        if (response.status === 202 || prepared.status === 'running') {
+          updateDraft(targetMode, {
+            result: {
+              status: 'running',
+              mode: targetMode,
+              code: prepared.code || 'CONTENT_AUDIT_PENDING',
+              auditId: prepared.auditId,
+              progress: prepared.progress,
+              inputImageUrl: prepared.imageUrl,
+              templateTitle: prepared.templateTitle,
+              message: prepared.message || '图片正在审核中，审核通过后将自动继续。',
+            },
+          })
+          continue
+        }
+        if (response.ok && prepared.status === 'ready') {
+          return prepared
+        }
+        clearPendingPreparation()
         updateDraft(targetMode, {
           result: {
             status: 'failed',
             mode: targetMode,
             code: prepared.code,
             auditId: prepared.auditId,
-            message: prepared.message || '素材准备失败，请稍后重试。',
+            message: prepared.message || '素材准备失败，请重新上传。',
           },
         })
-        return
+        return null
+      } catch {
+        consecutiveFailures += 1
+        if (consecutiveFailures >= 5) {
+          updateDraft(targetMode, {
+            result: {
+              status: 'running',
+              code: 'CONTENT_AUDIT_PENDING',
+              mode: targetMode,
+              message: '状态查询暂时中断，稍后重新进入页面会自动继续。',
+            },
+          })
+          return null
+        }
       }
-      updateCreationMessageImage(targetMode, prepared.imageUrl)
-
-      const pending: PendingCreation = {
-        mode: targetMode,
-        template,
-        gender: overrides.gender || gender || 'female',
-        templateTitle: overrides.templateTitle || prepared.templateTitle || modeLabels[targetMode],
-        imageUrl: prepared.imageUrl,
-      }
-      window.sessionStorage.setItem(pendingCreationStorageKey, JSON.stringify(pending))
-
-      const taskIdUrlResponse = await fetch('/api/migu/task-id-url', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ btoken, mode: targetMode }),
-      })
-      const taskIdUrlData = (await taskIdUrlResponse.json()) as { url?: string; message?: string }
-      if (!taskIdUrlResponse.ok || !taskIdUrlData.url) {
-        window.sessionStorage.removeItem(pendingCreationStorageKey)
-        updateDraft(targetMode, {
-          result: { status: 'failed', mode: targetMode, message: taskIdUrlData.message || '暂时无法发起创作，请稍后重试。' },
-        })
-        return
-      }
-
-      window.sessionStorage.setItem(miguTaskIdPendingKey, '1')
-      trackQingyuanTraceLog({
-        processId: 1,
-        processType: '2',
-        goodsId: templateIdFor(targetMode),
-        goodsName: pending.templateTitle,
-        isInMiguApp: miguEnv.isInMiguAPP,
-        isInMiniprogram: miguEnv.isInMiniprogram,
-      })
-      // 整页跳转到咪咕获取 taskId 页面，回来后由挂载时的 effect 接着走 resumeTokenGatedCreation
-      window.location.href = taskIdUrlData.url
-    } catch {
-      updateDraft(targetMode, {
-        result: { status: 'failed', mode: targetMode, message: '无法连接本地服务，请稍后重试。' },
-      })
     }
+    updateDraft(targetMode, {
+      result: {
+        status: 'running',
+        code: 'CONTENT_AUDIT_PENDING',
+        mode: targetMode,
+        message: '图片仍在审核中，稍后重新进入页面会自动继续。',
+      },
+    })
+    return null
+  }
+
+  async function continueTokenGatedPreparation(prepared: PreparedCreationResponse, btoken: string) {
+    if (
+      !prepared.preparationId ||
+      !prepared.mode ||
+      typeof prepared.template !== 'string' ||
+      !prepared.gender ||
+      !prepared.imageUrl
+    ) return
+    updateCreationMessageImage(prepared.mode, prepared.imageUrl)
+    const pending: PendingCreation = {
+      preparationId: prepared.preparationId,
+      mode: prepared.mode,
+      template: prepared.template,
+      gender: prepared.gender,
+      templateTitle: prepared.templateTitle || modeLabels[prepared.mode],
+      imageUrl: prepared.imageUrl,
+    }
+    if (!writeStorage('sessionStorage', pendingCreationStorageKey, JSON.stringify(pending))) {
+      updateDraft(prepared.mode, {
+        result: {
+          status: 'failed',
+          mode: prepared.mode,
+          code: 'WEBVIEW_STORAGE_UNAVAILABLE',
+          message: '当前浏览器无法保存跳转状态，请在系统浏览器或咪咕最新版中重试。',
+        },
+      })
+      return
+    }
+
+    const taskIdUrlResponse = await fetch('/api/migu/task-id-url', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ btoken, mode: prepared.mode }),
+    })
+    const taskIdUrlData = (await taskIdUrlResponse.json().catch(() => ({}))) as { url?: string; message?: string }
+    if (!taskIdUrlResponse.ok || !taskIdUrlData.url) {
+      removeStorage('sessionStorage', pendingCreationStorageKey)
+      updateDraft(prepared.mode, {
+        result: { status: 'failed', mode: prepared.mode, message: taskIdUrlData.message || '暂时无法发起创作，请稍后重试。' },
+      })
+      return
+    }
+
+    clearPendingPreparation()
+    writeStorage('sessionStorage', miguTaskIdPendingKey, '1')
+    trackQingyuanTraceLog({
+      processId: 1,
+      processType: '2',
+      goodsId: pending.template,
+      goodsName: pending.templateTitle,
+      isInMiguApp: miguEnv.isInMiguAPP,
+      isInMiniprogram: miguEnv.isInMiniprogram,
+    })
+    // 整页跳转到咪咕获取 taskId 页面，回来后由挂载时的 effect 接着走 resumeTokenGatedCreation
+    window.location.href = taskIdUrlData.url
   }
 
   // 从咪咕获取 taskId 页面跳转回来后续接创作：Token 预扣通过了才真正建任务
@@ -1931,11 +2107,7 @@ function App() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          mode: pending.mode,
-          template: pending.template,
-          gender: pending.gender,
-          templateTitle: pending.templateTitle,
-          imageUrl: pending.imageUrl,
+          preparationId: pending.preparationId,
           taskId: miguTaskId,
           otoken: btoken,
         }),
@@ -2066,6 +2238,7 @@ function App() {
         role: 'user',
         text: getCreationPrompt(targetMode, creationTemplateId),
         imageUrl: messagePreview || undefined,
+        mode: targetMode,
         createdAt: stamp,
       },
     ])
@@ -2126,6 +2299,7 @@ function App() {
         }
 
         current = mergeTaskProgress(current, { ...data, mode: targetMode })
+        if (current.inputImageUrl) updateCreationMessageImage(targetMode, current.inputImageUrl)
         updateDraft(targetMode, { result: current })
 
         if (current.status === 'queued' || current.status === 'running') {
@@ -2216,6 +2390,7 @@ function App() {
               )
               const data = (await response.json()) as CreateResult
               current = mergeTaskProgress(current, { ...data, mode: pendingMode })
+              if (current.inputImageUrl) updateCreationMessageImage(pendingMode, current.inputImageUrl)
               updateDraft(pendingMode, { result: current })
             } catch {
               // 页面恢复时单次查询失败不清除任务，交给后续自动轮询继续处理。
@@ -2652,6 +2827,9 @@ function CreationDock({
             <button
               key={item.id}
               className={item.id === mode ? 'active' : ''}
+              role="tab"
+              aria-selected={item.id === mode}
+              tabIndex={item.id === mode ? 0 : -1}
               onClick={() => {
                 onChooseMode(item.id)
                 onExpandComposer()
@@ -2853,6 +3031,7 @@ function TemplateCarousel({
                 className="template-preview-button"
                 type="button"
                 aria-label={`查看${item.title}模板详情`}
+                aria-pressed={selected}
                 onClick={() => {
                   if (!selected) {
                     selectionFromScrollRef.current = true
@@ -3810,6 +3989,20 @@ function CreationRecordCard({
   )
 }
 
+function useEscapeToClose(onClose: () => void) {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onCloseRef.current()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [])
+}
+
 function RecordVideoModal({
   record,
   onClose,
@@ -3819,6 +4012,7 @@ function RecordVideoModal({
   onClose: () => void
   onPublish?: () => void
 }) {
+  useEscapeToClose(onClose)
   if (!record.videoUrl) return null
 
   return (
@@ -3853,6 +4047,7 @@ function RecordActionSheet({
   onDetail: () => void
   onRedo: () => void
 }) {
+  useEscapeToClose(onClose)
   return (
     <div className="sheet-backdrop record-menu-backdrop" role="presentation">
       <section className="record-action-sheet" role="dialog" aria-modal="true" aria-label={`${record.title}更多操作`}>
@@ -3878,6 +4073,7 @@ function RecordActionSheet({
 }
 
 function RecordDetailModal({ record, onClose }: { record: CreationRecord; onClose: () => void }) {
+  useEscapeToClose(onClose)
   return (
     <div className="modal-backdrop soft" role="presentation">
       <section className="record-detail-modal" role="dialog" aria-modal="true" aria-labelledby="record-detail-title">
@@ -3906,6 +4102,7 @@ function ConfirmDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
+  useEscapeToClose(onCancel)
   return (
     <div className="modal-backdrop soft" role="presentation">
       <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -3925,6 +4122,7 @@ function ConfirmDialog({
 }
 
 function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose: () => void }) {
+  useEscapeToClose(onClose)
   return (
     <div className="sheet-backdrop notice-backdrop" role="presentation" onClick={onClose}>
       <section
@@ -3970,6 +4168,7 @@ function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose
 }
 
 function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  useEscapeToClose(onCancel)
   return (
     <div className="modal-backdrop soft permission-backdrop" role="presentation">
       <section className="permission-dialog login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title">
@@ -3996,6 +4195,7 @@ function MediaSourceSheet({
   onCancel: () => void
   onChoose: (source: UploadSource) => void
 }) {
+  useEscapeToClose(onCancel)
   return (
     <div className="sheet-backdrop media-source-backdrop" role="presentation">
       <section className="bottom-sheet media-source-sheet" role="dialog" aria-modal="true" aria-labelledby="media-source-title">
@@ -4050,6 +4250,7 @@ function PermissionDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
+  useEscapeToClose(onCancel)
   if (isIOS) {
     return (
       <div className="modal-backdrop soft permission-backdrop ios-permission-backdrop" role="presentation">
@@ -4102,6 +4303,7 @@ function CropSheet({
   onRatioChange: (ratio: CropRatio) => void
   onRequestUpload: () => void
 }) {
+  useEscapeToClose(onClose)
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 })
   const [freeFrame, setFreeFrame] = useState({ width: 72, height: 58 })
   const [isExporting, setIsExporting] = useState(false)
@@ -4402,6 +4604,7 @@ function CreationPanel({
   onSelectSample: (sample: SampleImage) => void
   onSelectTemplate: (id: string) => void
 }) {
+  useEscapeToClose(onClose)
   const effectiveSelectedSampleId = selectedSampleId || Object.values(sampleImagesByMode).flat().find((sample) => sample.imageUrl === preview)?.id
   const hasUploadedPreview = Boolean(preview && !effectiveSelectedSampleId)
   const templateIndex = Math.max(0, templates.findIndex((item) => item.id === selectedTemplate?.id))
@@ -4417,11 +4620,19 @@ function CreationPanel({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="sheet-handle" />
-        <div className="panel-mode-tabs">
+        <div className="panel-mode-tabs" role="tablist" aria-label="创作类型">
           {modes.map((item) => {
             const Icon = item.icon
             return (
-              <button key={item.id} className={item.id === mode ? 'active' : ''} type="button" onClick={() => onChooseMode(item.id)}>
+              <button
+                key={item.id}
+                className={item.id === mode ? 'active' : ''}
+                type="button"
+                role="tab"
+                aria-selected={item.id === mode}
+                tabIndex={item.id === mode ? 0 : -1}
+                onClick={() => onChooseMode(item.id)}
+              >
                 <Icon size={15} />
                 {item.short}
               </button>
@@ -4532,6 +4743,7 @@ function CheckBadge() {
 }
 
 function ImagePreviewModal({ src, onClose, onReplace }: { src: string; onClose: () => void; onReplace: () => void }) {
+  useEscapeToClose(onClose)
   return (
     <div className="image-preview-backdrop" role="presentation">
       <section className="image-preview-modal" role="dialog" aria-modal="true" aria-label="查看上传图片">
@@ -4561,6 +4773,7 @@ function InfoModal({
   onClose: () => void
   onViewUsageDetail: () => void
 }) {
+  useEscapeToClose(onClose)
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-title">
@@ -4598,6 +4811,7 @@ function BalanceModal({
   onClose: () => void
   onViewOfficial: () => void
 }) {
+  useEscapeToClose(onClose)
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <section className="balance-modal" role="dialog" aria-modal="true" aria-labelledby="balance-title" onClick={(event) => event.stopPropagation()}>
@@ -4642,7 +4856,7 @@ function normalizeCostumeTitles(items: CostumeOption[]): CostumeOption[] {
 
 function loadWorks() {
   try {
-    const raw = window.localStorage.getItem(worksStorageKey)
+    const raw = readStorage('localStorage', worksStorageKey)
     if (!raw) return []
     const parsed = JSON.parse(raw) as WorkItem[]
     return Array.isArray(parsed)
@@ -4695,7 +4909,7 @@ function buildCreationRecords(works: WorkItem[], drafts: Record<ModeId, ModeDraf
         videoUrl: result.videoUrl || result.previewUrl,
         posterUrl: result.posterUrl,
         progress: result.progress,
-        createdAt: new Date().toISOString(),
+        createdAt: toIsoTimestamp(result.createdAt),
         source: 'draft' as const,
       },
     ]
@@ -4799,6 +5013,11 @@ function formatFullTime(value: string) {
     second: '2-digit',
     hour12: false,
   })
+}
+
+function toIsoTimestamp(value?: number) {
+  const timestamp = Number(value)
+  return new Date(Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now()).toISOString()
 }
 
 function getTaskProgress(result: Pick<CreateResult, 'status' | 'message'> & { progress?: number }) {

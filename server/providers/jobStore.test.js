@@ -24,6 +24,8 @@ test('persists enough creation state to resume after a process restart', () => {
     gender: 'female',
     arkTaskId: 'ark-task-1',
     auditDataId: 'audit-task-1',
+    linkedJobId: 'job-linked-1',
+    code: 'TEST_ERROR_CODE',
     message: '视频正在生成',
     inputImageUrl: 'https://example.test/input.jpg',
     miguTaskId: 'migu-task-1',
@@ -39,6 +41,8 @@ test('persists enough creation state to resume after a process restart', () => {
   const restored = reopened.find('job-resume')
   assert.equal(restored.arkTaskId, 'ark-task-1')
   assert.equal(restored.auditDataId, 'audit-task-1')
+  assert.equal(restored.linkedJobId, 'job-linked-1')
+  assert.equal(restored.code, 'TEST_ERROR_CODE')
   assert.equal(restored.inputImageUrl, 'https://example.test/input.jpg')
   assert.equal(restored.miguOtoken, 'private-token')
   assert.equal(restored.mediumResults.length, 1)
