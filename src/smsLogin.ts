@@ -30,6 +30,16 @@ export function isSmsCode(value: string) {
   return smsCodePattern.test(value.trim())
 }
 
+export function shouldPromptForSmsLogin({
+  bypassLogin,
+  isLoggedIn,
+}: {
+  bypassLogin: boolean
+  isLoggedIn: boolean
+}) {
+  return !bypassLogin && !isLoggedIn
+}
+
 function validateMiguLoginUrl(value: string): string {
   if (value.length === 0 || value.length > 2_048) throw new Error('invalid login URL')
   const url = new URL(value)

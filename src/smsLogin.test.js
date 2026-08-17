@@ -4,9 +4,16 @@ import {
   isMainlandPhone,
   isSmsCode,
   requestSmsCode,
+  shouldPromptForSmsLogin,
   SmsLoginApiError,
   verifySmsLogin,
 } from './smsLogin.ts'
+
+test('prompts unauthenticated production visitors for SMS login on entry', () => {
+  assert.equal(shouldPromptForSmsLogin({ bypassLogin: false, isLoggedIn: false }), true)
+  assert.equal(shouldPromptForSmsLogin({ bypassLogin: false, isLoggedIn: true }), false)
+  assert.equal(shouldPromptForSmsLogin({ bypassLogin: true, isLoggedIn: false }), false)
+})
 
 function jsonResponse(body, init = {}) {
   return new Response(JSON.stringify(body), {

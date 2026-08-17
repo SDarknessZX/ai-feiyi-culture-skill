@@ -37,7 +37,14 @@ import {
   trackAmberSubmitTask,
 } from './amber'
 import { advanceQingyuanPageSeq, trackQingyuanPageLoad, trackQingyuanPageStay, trackQingyuanTraceLog, trackQingyuanUserLogin } from './qingyuan'
-import { isMainlandPhone, isSmsCode, requestSmsCode, SmsLoginApiError, verifySmsLogin } from './smsLogin'
+import {
+  isMainlandPhone,
+  isSmsCode,
+  requestSmsCode,
+  shouldPromptForSmsLogin,
+  SmsLoginApiError,
+  verifySmsLogin,
+} from './smsLogin'
 import { requestUsageDetailUrl, UsageDetailApiError } from './usageDetail'
 import './App.css'
 
@@ -711,7 +718,9 @@ function App() {
   const [tokenRemain, setTokenRemain] = useState<TokenRemainInfo | null>(null)
   const [showInfo, setShowInfo] = useState(false)
   const [showBalanceDetail, setShowBalanceDetail] = useState(false)
-  const [showLoginDialog, setShowLoginDialog] = useState(false)
+  const [showLoginDialog, setShowLoginDialog] = useState(() =>
+    shouldPromptForSmsLogin({ bypassLogin: temporarilyBypassMiguLogin, isLoggedIn }),
+  )
   const [showUsageNotice, setShowUsageNotice] = useState(false)
   const [showMediaSourceSheet, setShowMediaSourceSheet] = useState(false)
   const [showPermissionDialog, setShowPermissionDialog] = useState(false)
