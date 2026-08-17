@@ -58,6 +58,7 @@ import { assertImageHasVisibleContent } from './providers/imageValidation.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
 import { createCreationRateLimiter, getTrustProxyHops } from './middleware/createRateLimit.js'
 import { createSafeJsonErrorHandler } from './middleware/safeJsonErrors.js'
+import { getSecurityHeaders } from './middleware/securityHeaders.js'
 import { loadStoredJobs, pruneStoredJobs, saveStoredJob } from './providers/jobStore.js'
 import { findStoredAudit } from './providers/auditStore.js'
 import { createConfiguredSmsAuthService, createUnavailableSmsAuthService } from './auth/configuredSmsAuth.js'
@@ -67,6 +68,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const generatedVideosRoot = path.join(__dirname, '..', 'generated-videos')
 
 const app = express()
+app.disable('x-powered-by')
 const trustProxyHops = getTrustProxyHops()
 if (trustProxyHops > 0) app.set('trust proxy', trustProxyHops)
 const upload = multer({
@@ -554,9 +556,7 @@ app.use((request, response, next) => {
   request.requestId = requestId
   response.set({
     'X-Request-Id': requestId,
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'strict-origin-when-cross-origin',
-    'Permissions-Policy': 'camera=(self), microphone=(), geolocation=()',
+    ...getSecurityHeaders(),
   })
   const sendJson = response.json.bind(response)
   response.json = (body) => {

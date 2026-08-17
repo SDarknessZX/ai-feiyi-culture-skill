@@ -15,7 +15,7 @@
     "test:face-detect": "node --test server/providers/faceDetection.test.js",
     "test:migu": "node --test server/providers/miguAigc.test.js",
     "test:rate-limit": "node --test server/middleware/createRateLimit.test.js",
-    "test:sms-login": "node --test server/auth/smsAuth.test.js server/auth/smsLoginRouter.test.js server/middleware/safeJsonErrors.test.js server/providers/aliyunSms.test.js server/providers/miguAigc.test.js src/smsLogin.test.js",
+    "test:sms-login": "node --test server/auth/smsAuth.test.js server/auth/smsLoginRouter.test.js server/middleware/safeJsonErrors.test.js server/middleware/securityHeaders.test.js server/providers/aliyunSms.test.js server/providers/miguAigc.test.js src/smsLogin.test.js",
     "test:usage-detail": "node --test src/usageDetail.test.js server/providers/miguAigc.test.js",
     "test:storage": "node --test server/providers/tosStorage.test.js",
     "build": "tsc -b && vite build",

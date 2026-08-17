@@ -33,7 +33,7 @@ services:
       - key: ARK_LLM_MODEL
         value: doubao-seed-2-0-mini-260428
       - key: CORS_ORIGIN
-        sync: false
+        value: https://aibox.aibcicloud.com,https://ai-feiyi-culture-skill.onrender.com
       - key: TOS_REGION
         value: cn-beijing
       - key: TOS_ENDPOINT
