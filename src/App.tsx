@@ -4181,8 +4181,11 @@ function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose
 function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: (url: string) => void }) {
   useEscapeToClose(onCancel)
   const phoneInputRef = useRef<HTMLInputElement>(null)
+  const codeInputRef = useRef<HTMLInputElement>(null)
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null)
   const [phone, setPhone] = useState('')
   const [code, setCode] = useState('')
+  const [lastSentPhone, setLastSentPhone] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const [requestingCode, setRequestingCode] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -4191,7 +4194,9 @@ function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
   const codeValid = isSmsCode(code)
 
   useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     phoneInputRef.current?.focus()
+    return () => previouslyFocusedRef.current?.focus()
   }, [])
 
   useEffect(() => {
@@ -4209,8 +4214,10 @@ function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
     setFeedback(null)
     try {
       const result = await requestSmsCode(phone)
+      setLastSentPhone(phone)
       setCooldown(result.retryAfterSeconds)
       setFeedback({ tone: 'success', message: '验证码已发送，5 分钟内有效。' })
+      codeInputRef.current?.focus()
     } catch (error) {
       const smsError = error instanceof SmsLoginApiError ? error : null
       if (smsError?.retryAfterSeconds) setCooldown(smsError.retryAfterSeconds)
@@ -4289,16 +4296,24 @@ function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
             autoComplete="tel"
             maxLength={11}
             value={phone}
+            disabled={requestingCode || submitting}
             placeholder="请输入手机号"
             aria-describedby="login-feedback"
             aria-invalid={phone.length > 0 && !phoneValid}
-            onChange={(event) => setPhone(event.target.value.replace(/\D/g, '').slice(0, 11))}
+            onChange={(event) => {
+              const nextPhone = event.target.value.replace(/\D/g, '').slice(0, 11)
+              setPhone(nextPhone)
+              setCode('')
+              setFeedback(null)
+              if (nextPhone !== lastSentPhone) setCooldown(0)
+            }}
           />
           <div className="login-code-row">
             <label className="visually-hidden" htmlFor="login-code">
               短信验证码
             </label>
             <input
+              ref={codeInputRef}
               id="login-code"
               type="text"
               inputMode="numeric"
@@ -4306,12 +4321,13 @@ function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
               enterKeyHint="done"
               maxLength={6}
               value={code}
+              disabled={submitting}
               placeholder="请输入验证码"
               aria-describedby="login-feedback"
               aria-invalid={code.length > 0 && !codeValid}
               onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
             />
-            <button type="button" disabled={requestingCode || cooldown > 0} onClick={() => void sendCode()}>
+            <button type="button" disabled={requestingCode || submitting || cooldown > 0} onClick={() => void sendCode()}>
               {requestingCode ? <Loader2 className="spin" size={18} /> : cooldown > 0 ? `${cooldown}s 后重发` : '获取验证码'}
             </button>
           </div>
