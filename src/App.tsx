@@ -38,6 +38,7 @@ import {
 } from './amber'
 import { advanceQingyuanPageSeq, trackQingyuanPageLoad, trackQingyuanPageStay, trackQingyuanTraceLog, trackQingyuanUserLogin } from './qingyuan'
 import { isMainlandPhone, isSmsCode, requestSmsCode, SmsLoginApiError, verifySmsLogin } from './smsLogin'
+import { requestUsageDetailUrl, UsageDetailApiError } from './usageDetail'
 import './App.css'
 
 type ModeId = 'costume' | 'food' | 'painting'
@@ -217,6 +218,7 @@ type MiguEnv = {
 type PendingLoginAction =
   | { kind: 'upload'; returnToPanel: boolean }
   | { kind: 'template'; mode: ModeId; templateId: string }
+  | { kind: 'usage-detail' }
 
 const worksStorageKey = 'ai-yitu-zhenying-works'
 const pendingStorageKey = 'ai-yitu-zhenying-pending'
@@ -666,6 +668,7 @@ function takePendingLoginAction(): PendingLoginAction | null {
     const action = JSON.parse(raw) as PendingLoginAction
     if (action.kind === 'upload') return action
     if (action.kind === 'template' && action.mode && action.templateId) return action
+    if (action.kind === 'usage-detail') return action
   } catch {
     // 登录前保存的动作损坏时直接丢弃，避免回调后误触发创作。
   }
@@ -1038,6 +1041,11 @@ function App() {
       setUploadFlowPending(true)
       if (!acceptedAgreement) setShowUsageNotice(true)
       else setShowMediaSourceSheet(true)
+      return
+    }
+
+    if (action.kind === 'usage-detail') {
+      void openUsageDetail()
       return
     }
 
@@ -1494,23 +1502,24 @@ function App() {
   async function openUsageDetail() {
     const session = readMiguSession()
     if (!session?.btoken) {
-      setToast('请先登录咪咕账号后查看')
+      if (temporarilyBypassMiguLogin) {
+        setToast('当前为免登录测试模式，正式登录后可查看真实使用明细')
+        return
+      }
+      savePendingLoginAction({ kind: 'usage-detail' })
+      setShowInfo(false)
+      setShowBalanceDetail(false)
+      setShowLoginDialog(true)
       return
     }
     try {
-      const response = await fetch('/api/migu/usage-detail-url', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token: session.btoken }),
-      })
-      const data = (await response.json()) as { url?: string; message?: string }
-      if (response.ok && data.url) {
-        window.open(data.url, '_blank', 'noopener,noreferrer')
-        return
-      }
-      setToast(data.message || '暂时无法打开使用明细')
-    } catch {
-      setToast('无法连接本地服务，请稍后重试')
+      const { url } = await requestUsageDetailUrl(session.btoken)
+      setShowInfo(false)
+      setShowBalanceDetail(false)
+      window.location.assign(url)
+    } catch (error) {
+      const detailError = error instanceof UsageDetailApiError ? error : null
+      setToast(detailError?.message || '暂时无法打开使用明细，请稍后重试。')
     }
   }
 
@@ -2549,7 +2558,7 @@ function App() {
           onBack={leaveLibrary}
           onDelete={deleteWork}
           onClearDraft={clearDraftResult}
-          onOpenBalance={() => setShowBalanceDetail(true)}
+          onOpenBalance={() => void openUsageDetail()}
           onPickMode={chooseMode}
           onPublish={(record) => void publishVideo(record.videoUrl, record.posterUrl, record.taskId)}
           onUnlockHome={returnHome}
