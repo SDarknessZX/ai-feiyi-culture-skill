@@ -5,6 +5,7 @@ import {
   Camera,
   ChefHat,
   Check,
+  Circle,
   Crop,
   EllipsisVertical,
   Film,
@@ -12,12 +13,12 @@ import {
   ImageUp,
   Images,
   Info,
-  LogIn,
   Loader2,
   MessageCircle,
   Palette,
   Play,
   RefreshCw,
+  Scan,
   ShieldCheck,
   Shirt,
   Sparkles,
@@ -36,6 +37,7 @@ import {
   trackAmberSubmitTask,
 } from './amber'
 import { advanceQingyuanPageSeq, trackQingyuanPageLoad, trackQingyuanPageStay, trackQingyuanTraceLog, trackQingyuanUserLogin } from './qingyuan'
+import { isMainlandPhone, isSmsCode, requestSmsCode, SmsLoginApiError, verifySmsLogin } from './smsLogin'
 import './App.css'
 
 type ModeId = 'costume' | 'food' | 'painting'
@@ -1483,10 +1485,10 @@ function App() {
     setShowMediaSourceSheet(true)
   }
 
-  function prepareLoginRedirect() {
-    // 原生链接直接进入同源后端，再由服务端 302 到咪咕。相比 JS location.assign，
-    // 这条路径在微信 XWeb、鸿蒙 ArkWeb 以及旧版 iOS WebView 中更稳定。
+  function prepareLoginRedirect(loginUrl: string) {
+    // 短信校验成功后服务端才返回一次性咪咕登录地址；在跳转前保留待续接动作。
     writeStorage('sessionStorage', miguLoginPendingKey, '1')
+    window.location.assign(loginUrl)
   }
 
   async function openUsageDetail() {
@@ -4167,22 +4169,158 @@ function UsageNoticeSheet({ onAccept, onClose }: { onAccept: () => void; onClose
   )
 }
 
-function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: (url: string) => void }) {
   useEscapeToClose(onCancel)
+  const phoneInputRef = useRef<HTMLInputElement>(null)
+  const [phone, setPhone] = useState('')
+  const [code, setCode] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const [requestingCode, setRequestingCode] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [feedback, setFeedback] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
+  const phoneValid = isMainlandPhone(phone)
+  const codeValid = isSmsCode(code)
+
+  useEffect(() => {
+    phoneInputRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const timer = window.setTimeout(() => setCooldown((current) => Math.max(0, current - 1)), 1000)
+    return () => window.clearTimeout(timer)
+  }, [cooldown])
+
+  async function sendCode() {
+    if (!phoneValid || requestingCode || cooldown > 0) {
+      if (!phoneValid) setFeedback({ tone: 'error', message: '请输入正确的 11 位手机号。' })
+      return
+    }
+    setRequestingCode(true)
+    setFeedback(null)
+    try {
+      const result = await requestSmsCode(phone)
+      setCooldown(result.retryAfterSeconds)
+      setFeedback({ tone: 'success', message: '验证码已发送，5 分钟内有效。' })
+    } catch (error) {
+      const smsError = error instanceof SmsLoginApiError ? error : null
+      if (smsError?.retryAfterSeconds) setCooldown(smsError.retryAfterSeconds)
+      setFeedback({ tone: 'error', message: smsError?.message || '验证码发送失败，请稍后重试。' })
+    } finally {
+      setRequestingCode(false)
+    }
+  }
+
+  async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!phoneValid || !codeValid || submitting) return
+    setSubmitting(true)
+    setFeedback(null)
+    try {
+      const result = await verifySmsLogin(phone, code)
+      onConfirm(result.url)
+    } catch (error) {
+      const smsError = error instanceof SmsLoginApiError ? error : null
+      setFeedback({ tone: 'error', message: smsError?.message || '登录失败，请稍后重试。' })
+      setSubmitting(false)
+    }
+  }
+
+  function trapDialogFocus(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.key !== 'Tab') return
+    const focusable = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      ),
+    )
+    if (!focusable.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
   return (
-    <div className="modal-backdrop soft permission-backdrop" role="presentation">
-      <section className="permission-dialog login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-title">
-        <LogIn size={24} />
-        <h2 id="login-title">登录后继续创作</h2>
-        <p>上传照片前需要完成登录校验。登录状态会在当前设备上保留，避免重复校验。</p>
-        <div className="dialog-actions">
-          <button type="button" onClick={onCancel}>
-            暂不登录
-          </button>
-          <a href="/api/migu/login-redirect" onClick={onConfirm}>
-            登录并继续
-          </a>
+    <div
+      className="modal-backdrop permission-backdrop login-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel()
+      }}
+    >
+      <section
+        className="permission-dialog login-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="login-title"
+        aria-describedby="login-feedback"
+        aria-busy={requestingCode || submitting}
+        onKeyDown={trapDialogFocus}
+      >
+        <Scan className="login-scan-frame" strokeWidth={1.8} preserveAspectRatio="none" />
+        <div className="login-rec-indicator" aria-hidden="true">
+          <Circle size={10} fill="currentColor" />
+          <span>REC</span>
         </div>
+        <h2 id="login-title">短信登录</h2>
+        <form className="login-form" noValidate onSubmit={submitLogin}>
+          <label className="visually-hidden" htmlFor="login-phone">
+            手机号
+          </label>
+          <input
+            ref={phoneInputRef}
+            id="login-phone"
+            type="tel"
+            inputMode="numeric"
+            autoComplete="tel"
+            maxLength={11}
+            value={phone}
+            placeholder="请输入手机号"
+            aria-describedby="login-feedback"
+            aria-invalid={phone.length > 0 && !phoneValid}
+            onChange={(event) => setPhone(event.target.value.replace(/\D/g, '').slice(0, 11))}
+          />
+          <div className="login-code-row">
+            <label className="visually-hidden" htmlFor="login-code">
+              短信验证码
+            </label>
+            <input
+              id="login-code"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              enterKeyHint="done"
+              maxLength={6}
+              value={code}
+              placeholder="请输入验证码"
+              aria-describedby="login-feedback"
+              aria-invalid={code.length > 0 && !codeValid}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+            />
+            <button type="button" disabled={requestingCode || cooldown > 0} onClick={() => void sendCode()}>
+              {requestingCode ? <Loader2 className="spin" size={18} /> : cooldown > 0 ? `${cooldown}s 后重发` : '获取验证码'}
+            </button>
+          </div>
+          <div
+            id="login-feedback"
+            className={`login-feedback ${feedback?.tone || ''}`}
+            role="status"
+            aria-live="polite"
+          >
+            {feedback?.message || ''}
+          </div>
+          <button className="login-confirm" type="submit" disabled={!phoneValid || !codeValid || submitting}>
+            {submitting ? <Loader2 className="spin" size={20} /> : '确认'}
+          </button>
+          <button className="visually-hidden" type="button" onClick={onCancel}>
+            关闭短信登录
+          </button>
+        </form>
       </section>
     </div>
   )
