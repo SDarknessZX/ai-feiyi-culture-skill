@@ -1775,12 +1775,14 @@ button:disabled {
   position: relative;
   display: flex;
   width: min(408px, 100%);
-  height: min(410px, calc(100svh - 32px));
-  min-height: 360px;
+  height: auto;
+  max-height: calc(100svh - 32px);
+  min-height: 0;
+  aspect-ratio: 1 / 1;
   flex-direction: column;
   overflow: hidden;
   border-radius: 20px;
-  padding: 64px 32px 34px;
+  padding: 34px 32px 24px;
   color: #111;
   background: #fff;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
@@ -1789,27 +1791,50 @@ button:disabled {
 
 .login-dialog .login-scan-frame {
   position: absolute;
-  inset: 13px;
-  width: calc(100% - 26px);
-  height: calc(100% - 26px);
+  top: 10px;
+  right: 10px;
+  left: 10px;
+  width: calc(100% - 20px);
+  height: 55%;
   color: #0b0b0b;
   pointer-events: none;
 }
 
 .login-dialog .login-scan-frame path {
+  transform-box: fill-box;
   vector-effect: non-scaling-stroke;
+}
+
+.login-dialog .login-scan-frame path:nth-child(1) {
+  transform: scale(0.58);
+  transform-origin: left top;
+}
+
+.login-dialog .login-scan-frame path:nth-child(2) {
+  transform: scale(0.58);
+  transform-origin: right top;
+}
+
+.login-dialog .login-scan-frame path:nth-child(3) {
+  transform: scale(0.58);
+  transform-origin: right bottom;
+}
+
+.login-dialog .login-scan-frame path:nth-child(4) {
+  transform: scale(0.58);
+  transform-origin: left bottom;
 }
 
 .login-rec-indicator {
   position: absolute;
   z-index: 1;
-  top: 25px;
+  top: 18px;
   left: 32px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: #121212;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.01em;
 }
@@ -1824,7 +1849,7 @@ button:disabled {
   z-index: 1;
   margin: 0;
   color: #0c0c0d;
-  font-size: 25px;
+  font-size: 22px;
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1.2;
@@ -1837,13 +1862,13 @@ button:disabled {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  margin-top: 26px;
+  margin-top: 18px;
 }
 
 .login-form > input,
 .login-code-row input {
   width: 100%;
-  height: 50px;
+  height: 40px;
   min-width: 0;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -1852,7 +1877,7 @@ button:disabled {
   color: #151515;
   background: #f5f5f5;
   font: inherit;
-  font-size: 17px;
+  font-size: 16px;
   transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
 
@@ -1862,9 +1887,9 @@ button:disabled {
 }
 
 .login-form input:focus {
-  border-color: #202124;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(21, 21, 22, 0.1);
+  border-color: transparent;
+  background: #f7f7f7;
+  box-shadow: 0 0 0 2px rgba(21, 21, 22, 0.06);
 }
 
 .login-form input[aria-invalid='true'] {
@@ -1873,15 +1898,15 @@ button:disabled {
 
 .login-code-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(138px, 0.94fr);
+  grid-template-columns: minmax(0, 1fr) minmax(132px, 0.94fr);
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .login-code-row button {
   display: inline-flex;
   min-width: 0;
-  height: 50px;
+  height: 40px;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -1889,7 +1914,7 @@ button:disabled {
   padding: 0 12px;
   color: #fff;
   background: #050505;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1907,10 +1932,10 @@ button:disabled {
 
 .login-feedback {
   display: flex;
-  min-height: 38px;
+  min-height: 30px;
   align-items: center;
   justify-content: center;
-  padding: 7px 4px 0;
+  padding: 4px 4px 0;
   font-size: 12px;
   line-height: 1.35;
 }
@@ -1926,15 +1951,16 @@ button:disabled {
 .login-confirm {
   display: inline-flex;
   width: min(156px, 64%);
-  min-height: 46px;
+  min-height: 38px;
   align-items: center;
   justify-content: center;
   align-self: center;
+  margin-top: 28px;
   border: 0;
   border-radius: 999px;
   color: #fff;
   background: #050505;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 500;
 }
 
@@ -1946,13 +1972,13 @@ button:disabled {
 
 @media (max-width: 359px) {
   .permission-dialog.login-dialog {
-    height: min(390px, calc(100svh - 24px));
+    max-height: calc(100svh - 24px);
     padding-right: 22px;
     padding-left: 22px;
   }
 
   .login-code-row {
-    grid-template-columns: minmax(0, 1fr) minmax(122px, 0.9fr);
+    grid-template-columns: minmax(0, 1fr) minmax(116px, 0.9fr);
     gap: 8px;
   }
 

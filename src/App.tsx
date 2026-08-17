@@ -4287,7 +4287,7 @@ function LoginDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm:
         aria-busy={requestingCode || submitting}
         onKeyDown={trapDialogFocus}
       >
-        <Scan className="login-scan-frame" strokeWidth={1.8} preserveAspectRatio="none" />
+        <Scan className="login-scan-frame" viewBox="2 2 20 20" strokeWidth={1.8} preserveAspectRatio="none" />
         <div className="login-rec-indicator" aria-hidden="true">
           <Circle size={10} fill="currentColor" />
           <span>REC</span>

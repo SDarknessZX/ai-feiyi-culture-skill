@@ -1,73 +1,50 @@
-# Design QA — SMS login, home, works, and usage-detail integration
+# Design QA — SMS login reference match
 
 ## Evidence
 
-- Figma home source: `V:\projerct\audit-output\figma\02-home-source.png` (node `2126:5174`)
-- Browser home implementation: `V:\projerct\audit-output\playwright\01-home-375.png`
-- Combined home comparison: `V:\projerct\audit-output\comparisons\01-home-side-by-side.png`
-- Figma works source: `V:\projerct\audit-output\figma\03-library-source.png` (node `9:15221`)
-- Browser works implementation: `V:\projerct\audit-output\playwright\02-library-375.png`
-- Combined works comparison: `V:\projerct\audit-output\comparisons\02-library-side-by-side.png`
-- User-provided SMS login source: conversation attachment, 914 × 2048 px; the client did not expose a local path
-- Browser SMS implementation: `V:\projerct\audit-output\playwright\03-login-dialog-375.png`
-- Narrow SMS implementation: `V:\projerct\audit-output\playwright\04-login-dialog-320.png`
-- Figma usage-detail source: `V:\projerct\audit-output\figma\01-usage-details-source.png` (node `9:13775`)
+- Source visual truth: user-provided SMS login screenshot in this conversation, 914 × 2048 px. The client did not expose a local attachment path.
+- Initial implementation: `V:\projerct\audit-output\playwright\03-login-dialog-375.png`, 375 × 812 px at device scale factor 1.
+- Revised implementation: `V:\projerct\audit-output\playwright\07-login-dialog-final-375.png`, 375 × 812 px at device scale factor 1.
+- Narrow implementation: `V:\projerct\audit-output\playwright\08-login-dialog-final-320.png`, 320 × 700 px at device scale factor 1.
+- State: anonymous first visit, empty phone/code form, phone field automatically focused.
 
-Home and works captures are 375 × 812 CSS px and PNG px at device scale factor 1. The narrow SMS capture is 320 × 720 CSS px and PNG px at device scale factor 1. No density normalization was required for those browser/Figma pairs. The SMS attachment is higher density and could not be put into a local combined comparison because the attachment path was unavailable.
+The source is a higher-density mobile screenshot. The implementation captures use CSS-pixel density. The modal was compared by proportional geometry: card-to-viewport width, square card ratio, scan-frame region, title/input/button hierarchy, and confirmation-button placement.
 
-## State and runtime verification
+## Runtime verification
 
-- Home: initial anonymous state.
-- Works: anonymous empty-library state. The Figma source is a populated-library state, so card-level fidelity cannot be judged precisely.
-- SMS dialog: empty form; then arbitrary valid phone `13912345678`, mocked successful send, six-digit code, and trusted Migu redirect.
-- Usage detail: mocked verified login callback, mocked server response containing the exact official Migu usage-detail path, same-window navigation confirmed.
-- Primary interactions tested: open works, open usage detail, trigger SMS login, send code, verify automatic code-field focus and resend lock, submit code, resume usage-detail navigation.
-- Console errors checked: zero application errors or warnings. The third-party Amber SDK was replaced with an empty local test response so external network availability did not contaminate application-console results.
-- Responsive check: no document-level horizontal overflow at 320 px.
+- The login dialog opens automatically for an anonymous visitor.
+- Phone and verification-code inputs remain usable at 375 px and 320 px.
+- The code button and confirmation button remain inside the card with no horizontal overflow.
+- Automatic phone focus no longer produces the heavy black outline shown in the rejected implementation.
+- The Playwright captures completed successfully in installed Chrome.
 
 ## Findings
 
-- [P1] Home content and brand copy do not match the selected Figma frame.
-  - Location: home header, hero, chips, and template carousel.
-  - Evidence: Figma says “智能创作skill / AI创作中心” and shows general AI/football content; implementation says “AI非遗文化skill” and shows heritage-specific copy and imagery.
-  - Impact: this is a visible product-positioning difference, not a minor styling variance.
-  - Fix: only after owner approval, either update the Figma source to the heritage product direction or align the implementation copy/assets to the selected frame.
-
-- [P2] Home above-the-fold density and carousel composition differ materially.
-  - Location: chip rows, card rail, history prompt, and creation tray.
-  - Evidence: the Figma frame shows three compact cards above the history prompt; the implementation shows one centered full card plus a partial second card and a much larger blank region before the creation tray.
-  - Impact: hierarchy, content discovery, and the perceived amount of available content change noticeably.
-  - Fix: after approval, tighten vertical gaps and restore the Figma rail width/card count, or explicitly approve the current single-focus carousel as intentional.
-
-- [P2] Balance/usage-detail affordance lacks a designed unknown-balance state.
-  - Location: top-right header on home and works.
-  - Evidence: Figma uses a filled pill with a concrete balance; implementation renders “--” with a small text link when balance is unknown.
-  - Impact: the usage-detail entry is less prominent and the placeholder looks like unfinished data.
-  - Fix: after approval, add an explicit loading/unknown pill state using the same radius, padding, and hierarchy as the Figma balance control.
+- No remaining P0/P1/P2 implementation issue was visible in the revised 375 px or 320 px captures.
+- [P3] Exact source-to-capture pixel overlay remains unavailable because the conversation attachment has no local file path.
 
 ## Required fidelity surfaces
 
-- Fonts and typography: family and dark navy hierarchy are broadly consistent; brand wording and header wrapping differ as noted above.
-- Spacing and layout rhythm: actionable P2 drift remains on the home card rail and vertical whitespace.
-- Colors and tokens: pale gray background, navy text, blue active states, and orange retention notice are consistent enough; no independent P1/P2 color issue found.
-- Image quality and asset fidelity: implementation imagery is sharp and properly cropped, but subjects differ from the Figma frame as part of the P1 content-direction mismatch.
-- Copy and content: actionable P1 brand/product-copy mismatch remains.
-- Icons: visible controls use a consistent outline icon family; no broken icon was observed. The works empty state has no matching Figma source state to validate.
+- Fonts and typography: the title was reduced to the source hierarchy; control labels and placeholders retain readable weights at both widths.
+- Spacing and layout rhythm: the dialog is square, the scan frame encloses the title and two inputs, and the confirmation action sits independently below it as in the reference.
+- Colors and visual tokens: white card, charcoal copy, pale input fills, black send-code button, gray disabled confirmation, red REC indicator, and dark overlay match the source palette.
+- Image quality and asset fidelity: no raster imagery is required in this modal. The scan treatment and REC indicator use the existing Lucide icon set and remain sharp at both sizes.
+- Copy and content: title, placeholders, send-code label, and confirmation label match the reference.
 
 ## Focused comparison evidence
 
-The full-view home comparison is readable enough to judge its typography, spacing, chips, card imagery, and navigation, so an additional crop was unnecessary. The works pair is deliberately classified as a state mismatch, not a pixel comparison. SMS focused fidelity remains blocked because the user attachment could not be placed beside the browser capture in one local comparison input. The usage-detail page is intentionally delegated to the official Migu H5 page named in the Figma annotation; a real authenticated provider-page screenshot was not captured.
+The dialog itself occupies most of each capture, so a separate crop would not reveal additional typography or control detail. The 320 px capture serves as the focused responsive check.
 
 ## Comparison history
 
-- Iteration 1: blocked because no approved browser surface was available.
-- Iteration 2: Figma usage-detail source captured and official same-window provider integration implemented; runtime evidence still unavailable.
-- Iteration 3: user approved isolated Playwright. Browser captures and interaction checks passed. Combined home and works comparisons found the P1/P2 items above. No style changes were applied because the user explicitly requested approval before modifying other screens.
+- Iteration 1: rejected implementation was a tall card with a scan frame extending through the confirmation area and a heavy focused-input outline.
+- Iteration 2: changed to a square card, compressed typography and controls, removed the heavy focus outline, and shortened the scan region; the lower scan corners still intersected the code row.
+- Iteration 3: moved the lower scan corners below the code row and moved confirmation into the independent lower action area. Revised 375 px and 320 px captures show no P0/P1/P2 issue.
 
 ## Implementation checklist
 
-1. Obtain owner decisions for the three P1/P2 visual differences.
-2. If approved, align one screen at a time and repeat same-state, same-viewport comparison.
-3. Capture a real authenticated official usage-detail page during production smoke testing without exposing tokens or personal data.
+1. Deploy the revised CSS and component viewBox.
+2. Recheck the same anonymous state over the production HTTPS domain.
+3. Preserve the four SMS credentials only in the server-side `.env.local` file.
 
 final result: blocked
