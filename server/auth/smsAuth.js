@@ -34,6 +34,7 @@ export function createSmsAuthService({
       }
 
       const timestamp = now()
+      store.prune(timestamp - cooldownMs)
       const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0')
       const reservation = store.reserve({
         phone,
@@ -56,7 +57,6 @@ export function createSmsAuthService({
           expiresInMinutes: Math.ceil(codeTtlMs / 60_000),
         })
       } catch (cause) {
-        store.remove(phone)
         throw new SmsAuthError('SMS_SEND_FAILED', '验证码暂时无法发送，请稍后重试。', {
           status: 503,
           cause,
@@ -76,7 +76,7 @@ export function createSmsAuthService({
         throw new SmsAuthError('SMS_CODE_INVALID', '验证码错误或已过期。')
       }
 
-      const verified = store.consume({ phone, code, now: now(), maxAttempts })
+      const verified = store.consume({ phone, code, now: now(), maxAttempts, cooldownMs })
       if (!verified) {
         throw new SmsAuthError('SMS_CODE_INVALID', '验证码错误或已过期。')
       }

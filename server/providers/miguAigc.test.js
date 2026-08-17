@@ -182,6 +182,77 @@ test('uses the login URL returned by the documented URL-login flow', async () =>
   }
 })
 
+test('rejects login URLs outside the HTTPS Migu domain allowlist', async () => {
+  const originalFetch = globalThis.fetch
+  const names = [
+    'MIGU_AIGC_APP_ID',
+    'MIGU_AIGC_APP_SECRET',
+    'MIGU_CHANNEL_CODE',
+    'MIGU_CALLBACK_URL',
+    'MIGU_CHANNEL_LOGIN_SIGN_KEY',
+    'MIGU_CHANNEL_LOGIN_KEY',
+  ]
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'legacy-secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+    MIGU_CHANNEL_LOGIN_SIGN_KEY: 'dedicated-signature-key',
+    MIGU_CHANNEL_LOGIN_KEY: 'dedicated-login-key',
+  })
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ loginUrl: 'https://migu.cn.attacker.example/login' }), { status: 200 })
+
+  try {
+    await assert.rejects(() => buildLoginRedirectUrlForMsisdn('18812345678'), /登录地址不可信/)
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]
+      else process.env[name] = previous[name]
+    }
+  }
+})
+
+test('rejects insecure, credential-bearing, and oversized Migu login URLs', async () => {
+  const originalFetch = globalThis.fetch
+  const names = [
+    'MIGU_AIGC_APP_ID',
+    'MIGU_AIGC_APP_SECRET',
+    'MIGU_CHANNEL_CODE',
+    'MIGU_CALLBACK_URL',
+    'MIGU_CHANNEL_LOGIN_SIGN_KEY',
+    'MIGU_CHANNEL_LOGIN_KEY',
+  ]
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'legacy-secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+    MIGU_CHANNEL_LOGIN_SIGN_KEY: 'dedicated-signature-key',
+    MIGU_CHANNEL_LOGIN_KEY: 'dedicated-login-key',
+  })
+
+  try {
+    for (const loginUrl of [
+      'http://passport.migu.cn/login',
+      'https://user:pass@passport.migu.cn/login',
+      `https://passport.migu.cn/login?ticket=${'x'.repeat(4_100)}`,
+    ]) {
+      globalThis.fetch = async () => new Response(JSON.stringify({ loginUrl }), { status: 200 })
+      await assert.rejects(() => buildLoginRedirectUrlForMsisdn('18812345678'), /登录地址不可信/)
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]
+      else process.env[name] = previous[name]
+    }
+  }
+})
+
 test('builds the AIGC bridge URL from the token returned to our callback', () => {
   const names = ['MIGU_AIGC_APP_ID', 'MIGU_AIGC_APP_SECRET', 'MIGU_CHANNEL_CODE', 'MIGU_CALLBACK_URL', 'MIGU_PROJECT_ID']
   const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))

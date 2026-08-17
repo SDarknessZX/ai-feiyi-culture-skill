@@ -32,7 +32,6 @@ import {
 } from './providers/contentAudit.js'
 import {
   buildAigcLoginRedirectUrl,
-  buildLoginRedirectUrl,
   buildPublishRedirectUrl,
   buildTaskIdRedirectUrl,
   buildUsageDetailUrl,
@@ -58,6 +57,7 @@ import { detectFaces, getFaceDetectionConfigReport } from './providers/faceDetec
 import { assertImageHasVisibleContent } from './providers/imageValidation.js'
 import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt } from './promptLibrary.js'
 import { createCreationRateLimiter, getTrustProxyHops } from './middleware/createRateLimit.js'
+import { createSafeJsonErrorHandler } from './middleware/safeJsonErrors.js'
 import { loadStoredJobs, pruneStoredJobs, saveStoredJob } from './providers/jobStore.js'
 import { findStoredAudit } from './providers/auditStore.js'
 import { createConfiguredSmsAuthService, createUnavailableSmsAuthService } from './auth/configuredSmsAuth.js'
@@ -549,7 +549,6 @@ const configuredCorsOrigins = (process.env.CORS_ORIGIN || '')
   .filter(Boolean)
 if (configuredCorsOrigins.length) app.use(cors({ origin: configuredCorsOrigins }))
 else if (process.env.NODE_ENV !== 'production') app.use(cors())
-app.use(express.json())
 app.use((request, response, next) => {
   const requestId = String(request.headers['x-request-id'] || '').trim().slice(0, 128) || crypto.randomUUID()
   request.requestId = requestId
@@ -582,6 +581,8 @@ app.use((request, response, next) => {
   }
   next()
 })
+app.use(express.json())
+app.use(createSafeJsonErrorHandler())
 const smsAuthConfig = getAliyunSmsConfigReport()
 const smsAuthRuntime = smsAuthConfig.configured
   ? createConfiguredSmsAuthService()
@@ -653,23 +654,6 @@ app.get('/api/health', (_request, response) => {
       smsAuth,
     },
   })
-})
-app.get('/api/migu/login-url', async (request, response) => {
-  try {
-    const url = await buildLoginRedirectUrl()
-    response.json({ url })
-  } catch (error) {
-    response.status(400).json({ message: error instanceof Error ? error.message : '无法生成登录地址。' })
-  }
-})
-app.get('/api/migu/login-redirect', async (_request, response) => {
-  response.set('Cache-Control', 'no-store')
-  try {
-    const url = await buildLoginRedirectUrl()
-    response.redirect(302, url)
-  } catch (error) {
-    response.status(400).send(error instanceof Error ? error.message : '无法跳转到咪咕登录。')
-  }
 })
 app.post('/api/migu/aigc-login-url', (request, response) => {
   const token = String(request.body?.token || '').trim()
@@ -1633,7 +1617,7 @@ app.use((error, request, response, _next) => {
     return response.status(400).json({ status: 'failed', message })
   }
   const status = error?.statusCode || 500
-  const message = error instanceof Error ? error.message : '服务内部错误。'
+  const message = status >= 500 ? '服务内部错误，请稍后重试。' : error instanceof Error ? error.message : '请求处理失败。'
   console.error('未处理的服务错误：', error)
   response.status(status).json({ status: 'failed', message })
 })

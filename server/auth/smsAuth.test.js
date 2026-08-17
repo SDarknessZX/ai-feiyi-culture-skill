@@ -79,6 +79,15 @@ test('accepts the correct code once and builds the login URL for that phone', as
       return true
     })
     assert.deepEqual(fixture.loginPhones, [validPhone])
+
+    await assert.rejects(() => fixture.service.sendCode(validPhone), (error) => {
+      assert.ok(error instanceof SmsAuthError)
+      assert.equal(error.code, 'SMS_SEND_TOO_FREQUENT')
+      return true
+    })
+    fixture.setNow(61_001)
+    await fixture.service.sendCode(validPhone)
+    assert.equal(fixture.sentMessages.length, 2)
   } finally {
     fixture.close()
   }
@@ -99,6 +108,11 @@ test('limits incorrect verification attempts without calling the login provider'
     await assert.rejects(() => fixture.service.verifyCode(validPhone, correctCode), (error) => {
       assert.ok(error instanceof SmsAuthError)
       assert.equal(error.code, 'SMS_CODE_INVALID')
+      return true
+    })
+    await assert.rejects(() => fixture.service.sendCode(validPhone), (error) => {
+      assert.ok(error instanceof SmsAuthError)
+      assert.equal(error.code, 'SMS_SEND_TOO_FREQUENT')
       return true
     })
     assert.deepEqual(fixture.loginPhones, [])
@@ -123,6 +137,24 @@ test('expires codes after five minutes and allows a new send after cooldown', as
       assert.equal(error.code, 'SMS_CODE_INVALID')
       return true
     })
+  } finally {
+    fixture.close()
+  }
+})
+
+test('rejects a code exactly at the five-minute expiry boundary', async () => {
+  const fixture = createFixture()
+  try {
+    await fixture.service.sendCode(validPhone)
+    const code = fixture.sentMessages[0].code
+
+    fixture.setNow(301_000)
+    await assert.rejects(() => fixture.service.verifyCode(validPhone, code), (error) => {
+      assert.ok(error instanceof SmsAuthError)
+      assert.equal(error.code, 'SMS_CODE_INVALID')
+      return true
+    })
+    assert.deepEqual(fixture.loginPhones, [])
   } finally {
     fixture.close()
   }
@@ -170,6 +202,31 @@ test('rejects malformed phone numbers and verification codes at the service boun
       assert.equal(error.code, 'SMS_CODE_INVALID')
       return true
     })
+  } finally {
+    fixture.close()
+  }
+})
+
+test('keeps the resend cooldown after an ambiguous SMS provider failure', async () => {
+  let senderCalls = 0
+  const fixture = createFixture({
+    sender: async () => {
+      senderCalls += 1
+      throw new Error('timeout after request submission')
+    },
+  })
+  try {
+    await assert.rejects(() => fixture.service.sendCode(validPhone), (error) => {
+      assert.ok(error instanceof SmsAuthError)
+      assert.equal(error.code, 'SMS_SEND_FAILED')
+      return true
+    })
+    await assert.rejects(() => fixture.service.sendCode(validPhone), (error) => {
+      assert.ok(error instanceof SmsAuthError)
+      assert.equal(error.code, 'SMS_SEND_TOO_FREQUENT')
+      return true
+    })
+    assert.equal(senderCalls, 1)
   } finally {
     fixture.close()
   }

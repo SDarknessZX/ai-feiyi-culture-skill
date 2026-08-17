@@ -29,7 +29,9 @@ export function createSmsChallengeStore(dbPath, { secret } = {}) {
       sent_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
       failed_attempts INTEGER NOT NULL DEFAULT 0
-    )
+    );
+    CREATE INDEX IF NOT EXISTS idx_sms_login_challenges_expires_at
+      ON sms_login_challenges(expires_at);
   `)
   if (dbPath !== ':memory:') {
     try {
@@ -52,6 +54,11 @@ export function createSmsChallengeStore(dbPath, { secret } = {}) {
   const incrementFailures = db.prepare(`
     UPDATE sms_login_challenges SET failed_attempts = failed_attempts + 1 WHERE phone_key = ?
   `)
+  const invalidateChallenge = db.prepare(`
+    UPDATE sms_login_challenges
+    SET code_digest = '', failed_attempts = ?, expires_at = ?
+    WHERE phone_key = ?
+  `)
   const deleteChallenge = db.prepare('DELETE FROM sms_login_challenges WHERE phone_key = ?')
   const pruneChallenges = db.prepare('DELETE FROM sms_login_challenges WHERE expires_at < ?')
   let closed = false
@@ -62,6 +69,15 @@ export function createSmsChallengeStore(dbPath, { secret } = {}) {
 
   function codeDigest(phone, code) {
     return secureDigest(secret, `code:${phone}:${code}`)
+  }
+
+  function invalidateOrDelete(key, current, now, maxAttempts, cooldownMs) {
+    const sentAt = Number(current.sent_at)
+    if (now - sentAt < cooldownMs) {
+      invalidateChallenge.run(maxAttempts, Math.max(Number(current.expires_at), sentAt + cooldownMs), key)
+    } else {
+      deleteChallenge.run(key)
+    }
   }
 
   return {
@@ -77,23 +93,22 @@ export function createSmsChallengeStore(dbPath, { secret } = {}) {
       upsertChallenge.run(key, codeDigest(phone, code), sentAt, expiresAt)
       return { accepted: true, retryAfterSeconds: Math.ceil(cooldownMs / 1000) }
     },
-    consume({ phone, code, now, maxAttempts }) {
+    consume({ phone, code, now, maxAttempts, cooldownMs }) {
       const key = phoneKey(phone)
       const current = selectChallenge.get(key)
-      if (!current || Number(current.expires_at) < now || Number(current.failed_attempts) >= maxAttempts) {
-        if (current) deleteChallenge.run(key)
+      if (!current || Number(current.expires_at) <= now || Number(current.failed_attempts) >= maxAttempts) {
+        if (current) invalidateOrDelete(key, current, now, maxAttempts, cooldownMs)
         return false
       }
       if (!safeEqual(current.code_digest, codeDigest(phone, code))) {
-        if (Number(current.failed_attempts) + 1 >= maxAttempts) deleteChallenge.run(key)
+        if (Number(current.failed_attempts) + 1 >= maxAttempts) {
+          invalidateOrDelete(key, current, now, maxAttempts, cooldownMs)
+        }
         else incrementFailures.run(key)
         return false
       }
-      deleteChallenge.run(key)
+      invalidateOrDelete(key, current, now, maxAttempts, cooldownMs)
       return true
-    },
-    remove(phone) {
-      deleteChallenge.run(phoneKey(phone))
     },
     prune(now) {
       return Number(pruneChallenges.run(now).changes || 0)

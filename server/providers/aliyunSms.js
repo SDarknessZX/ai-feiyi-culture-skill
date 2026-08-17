@@ -42,6 +42,8 @@ export function createAliyunSmsClient() {
   const config = new OpenApiConfig({
     credential,
     endpoint: aliyunSmsEndpoint,
+    connectTimeout: 5_000,
+    readTimeout: 10_000,
   })
   return new Dysmsapi20170525(config)
 }

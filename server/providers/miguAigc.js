@@ -219,13 +219,30 @@ export function buildAigcLoginRedirectUrl(cToken) {
   return `${LOGIN_PAGE_BASE}?${params.toString()}`
 }
 
+export function validateMiguLoginUrl(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2_048) {
+    throw new Error('咪咕登录地址不可信。')
+  }
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('咪咕登录地址不可信。')
+  }
+  const hostname = url.hostname.toLowerCase()
+  const trustedHost = hostname === 'migu.cn' || hostname.endsWith('.migu.cn')
+  if (url.protocol !== 'https:' || !trustedHost || url.username || url.password) {
+    throw new Error('咪咕登录地址不可信。')
+  }
+  return url.toString()
+}
+
 // 登录验证页面：把浏览器整页跳转到这个地址，咪咕登录完成后会带 btoken/vuid 回调到 cburl
 export async function buildLoginRedirectUrl() {
   assertConfigured()
   const { callbackUrl } = getChannelLoginConfig()
   const data = await requestChannelLogin({ callbackUrl })
-  if (data.loginUrl) return data.loginUrl
-  return buildAigcLoginRedirectUrl(data.token)
+  return validateMiguLoginUrl(data.loginUrl || buildAigcLoginRedirectUrl(data.token))
 }
 
 // 只有手机号已通过我方短信验证码校验后才可调用；传入本次验证的手机号，
@@ -233,8 +250,7 @@ export async function buildLoginRedirectUrl() {
 export async function buildLoginRedirectUrlForMsisdn(msisdn) {
   assertConfigured()
   const data = await requestChannelLogin({ msisdn })
-  if (data.loginUrl) return data.loginUrl
-  return buildAigcLoginRedirectUrl(data.token)
+  return validateMiguLoginUrl(data.loginUrl || buildAigcLoginRedirectUrl(data.token))
 }
 
 // 获取 taskId 页面：同样是整页跳转，咪咕会把 taskId（或 resumeCode/code）带回 cburl
