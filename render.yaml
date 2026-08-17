@@ -78,6 +78,24 @@ services:
         sync: false
       - key: MIGU_CHANNEL_LOGIN_CALLBACK_URL
         sync: false
+      - key: ALIBABA_CLOUD_ACCESS_KEY_ID
+        sync: false
+      - key: ALIBABA_CLOUD_ACCESS_KEY_SECRET
+        sync: false
+      - key: ALIYUN_SMS_SIGN_NAME
+        sync: false
+      - key: ALIYUN_SMS_TEMPLATE_CODE
+        sync: false
+      - key: SMS_CHALLENGE_SECRET
+        generateValue: true
+      - key: SMS_SEND_RATE_LIMIT
+        value: 5
+      - key: SMS_SEND_RATE_LIMIT_WINDOW_MS
+        value: 600000
+      - key: SMS_VERIFY_RATE_LIMIT
+        value: 10
+      - key: SMS_VERIFY_RATE_LIMIT_WINDOW_MS
+        value: 600000
       - key: MIGU_TOKEN_GATING_ENABLED
         sync: false
       - key: MIGU_API_TIMEOUT_MS

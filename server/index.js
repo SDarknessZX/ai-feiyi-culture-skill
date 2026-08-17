@@ -47,6 +47,7 @@ import {
   reportInteraction,
   reportTokenResult,
 } from './providers/miguAigc.js'
+import { getAliyunSmsConfigReport } from './providers/aliyunSms.js'
 import { recordMiguTokenTask, updateMiguTokenSettlement, updateMiguTokenTaskState } from './providers/miguTaskStore.js'
 import { cacheGeneratedVideo } from './providers/generatedVideoStorage.js'
 import { archiveGeneratedVideo, ensureArchivedVideoPoster } from './providers/videoArchive.js'
@@ -59,6 +60,8 @@ import { buildCostumeReferencePrompt, buildCostumeVideoPrompt, foodSystemPrompt 
 import { createCreationRateLimiter, getTrustProxyHops } from './middleware/createRateLimit.js'
 import { loadStoredJobs, pruneStoredJobs, saveStoredJob } from './providers/jobStore.js'
 import { findStoredAudit } from './providers/auditStore.js'
+import { createConfiguredSmsAuthService, createUnavailableSmsAuthService } from './auth/configuredSmsAuth.js'
+import { createSmsLoginRouter } from './auth/smsLoginRouter.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const generatedVideosRoot = path.join(__dirname, '..', 'generated-videos')
@@ -579,6 +582,11 @@ app.use((request, response, next) => {
   }
   next()
 })
+const smsAuthConfig = getAliyunSmsConfigReport()
+const smsAuthRuntime = smsAuthConfig.configured
+  ? createConfiguredSmsAuthService()
+  : { service: createUnavailableSmsAuthService(), close: () => {} }
+app.use('/api/auth/sms', createSmsLoginRouter({ service: smsAuthRuntime.service }))
 app.use(
   '/templates',
   express.static(path.join(__dirname, '..', 'public', 'templates'), {
@@ -610,6 +618,7 @@ app.get('/api/health', (_request, response) => {
   const tos = getTosConfigReport()
   const contentAudit = getContentAuditConfigReport()
   const miguAigc = getMiguAigcConfigReport()
+  const smsAuth = getAliyunSmsConfigReport()
   const readinessIssues = []
   if (process.env.NODE_ENV === 'production') {
     if (config.provider !== 'ark' || !config.arkConfigured) readinessIssues.push('Ark 视频生成配置不完整')
@@ -622,6 +631,9 @@ app.get('/api/health', (_request, response) => {
       (!miguAigc.configured || !miguAigc.channelLoginConfigured)
     ) {
       readinessIssues.push('咪咕登录配置不完整')
+    }
+    if (process.env.VITE_BYPASS_MIGU_LOGIN !== 'true' && !smsAuth.configured) {
+      readinessIssues.push('阿里云短信登录配置不完整')
     }
     if (process.env.MIGU_TOKEN_GATING_ENABLED === 'true' && !miguAigc.tokenGatingEnabled) {
       readinessIssues.push('咪咕 Token 网关已要求启用，但配置不完整')
@@ -638,6 +650,7 @@ app.get('/api/health', (_request, response) => {
       tos,
       contentAudit,
       miguAigc,
+      smsAuth,
     },
   })
 })
