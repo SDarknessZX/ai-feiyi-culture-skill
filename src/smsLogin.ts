@@ -30,6 +30,17 @@ export function isSmsCode(value: string) {
   return smsCodePattern.test(value.trim())
 }
 
+function validateMiguLoginUrl(value: string): string {
+  if (value.length === 0 || value.length > 2_048) throw new Error('invalid login URL')
+  const url = new URL(value)
+  const hostname = url.hostname.toLowerCase()
+  const trustedHost = hostname === 'migu.cn' || hostname.endsWith('.migu.cn')
+  if (url.protocol !== 'https:' || !trustedHost || url.username || url.password) {
+    throw new Error('invalid login URL')
+  }
+  return url.toString()
+}
+
 async function postJson(path: string, body: Record<string, string>, fetcher: Fetcher) {
   let response: Response
   try {
@@ -84,11 +95,11 @@ export async function verifySmsLogin(phoneValue: string, codeValue: string, fetc
   if (typeof payload.url !== 'string') {
     throw new SmsLoginApiError('INVALID_RESPONSE', '登录服务响应异常，请重新获取验证码。')
   }
+  let url: string
   try {
-    const url = new URL(payload.url)
-    if (url.protocol !== 'https:') throw new Error('unsupported protocol')
+    url = validateMiguLoginUrl(payload.url)
   } catch {
     throw new SmsLoginApiError('INVALID_RESPONSE', '登录服务响应异常，请重新获取验证码。')
   }
-  return { url: payload.url }
+  return { url }
 }

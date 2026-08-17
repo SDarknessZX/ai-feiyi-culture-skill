@@ -41,10 +41,24 @@ test('verifies the code and returns the one-time login URL', async () => {
   const result = await verifySmsLogin('13800138000', ' 123456 ', async (input, init) => {
     assert.equal(String(input), '/api/auth/sms/verify')
     assert.deepEqual(JSON.parse(String(init?.body)), { phone: '13800138000', code: '123456' })
-    return jsonResponse({ url: 'https://login.example.test/one-time' })
+    return jsonResponse({ url: 'https://passport.migu.cn/one-time' })
   })
 
-  assert.deepEqual(result, { url: 'https://login.example.test/one-time' })
+  assert.deepEqual(result, { url: 'https://passport.migu.cn/one-time' })
+})
+
+test('rejects login handoff URLs outside the HTTPS Migu allowlist', async () => {
+  for (const url of [
+    'https://migu.cn.attacker.example/login',
+    'http://passport.migu.cn/login',
+    'https://user:pass@passport.migu.cn/login',
+    `https://passport.migu.cn/login?ticket=${'x'.repeat(4_100)}`,
+  ]) {
+    await assert.rejects(
+      () => verifySmsLogin('13800138000', '123456', async () => jsonResponse({ url })),
+      (error) => error instanceof SmsLoginApiError && error.code === 'INVALID_RESPONSE',
+    )
+  }
 })
 
 test('surfaces safe API messages and retry metadata', async () => {
