@@ -1,8 +1,12 @@
-import Credential from '@alicloud/credentials'
-import Dysmsapi20170525, { SendSmsRequest } from '@alicloud/dysmsapi20170525'
+import CredentialModule from '@alicloud/credentials'
+import DysmsapiModule, { SendSmsRequest } from '@alicloud/dysmsapi20170525'
 import { Config as OpenApiConfig } from '@alicloud/openapi-client'
 
 const aliyunSmsEndpoint = 'dysmsapi.aliyuncs.com'
+const Credential =
+  typeof CredentialModule === 'function' ? CredentialModule : CredentialModule.default
+const Dysmsapi20170525 =
+  typeof DysmsapiModule === 'function' ? DysmsapiModule : DysmsapiModule.default
 
 export class AliyunSmsError extends Error {
   constructor(code, message, { cause } = {}) {

@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAliyunSmsSender, getAliyunSmsConfigReport } from './aliyunSms.js'
+import {
+  createAliyunSmsClient,
+  createAliyunSmsSender,
+  getAliyunSmsConfigReport,
+} from './aliyunSms.js'
+
+test('creates the Aliyun SMS SDK client under native Node ESM', () => {
+  const client = createAliyunSmsClient()
+
+  assert.equal(typeof client.sendSms, 'function')
+})
 
 test('sends a verification code with the configured Aliyun sign and template', async () => {
   const requests = []
