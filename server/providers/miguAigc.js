@@ -165,7 +165,7 @@ async function requestChannelLogin({ callbackUrl = '', msisdn = '' } = {}) {
     )
   }
   if (msisdn && !/^1\d{10}$/.test(msisdn)) {
-    throw new Error('MIGU_CHANNEL_LOGIN_MSISDN 必须是合法的 11 位手机号。')
+    throw new Error('登录手机号必须是合法的 11 位号码。')
   }
   if (!msisdn && !callbackUrl) {
     throw new Error('渠道登录缺少手机号或登录回调地址。')
@@ -222,8 +222,17 @@ export function buildAigcLoginRedirectUrl(cToken) {
 // 登录验证页面：把浏览器整页跳转到这个地址，咪咕登录完成后会带 btoken/vuid 回调到 cburl
 export async function buildLoginRedirectUrl() {
   assertConfigured()
-  const { callbackUrl, msisdn } = getChannelLoginConfig()
-  const data = msisdn ? await requestChannelLogin({ msisdn }) : await requestChannelLogin({ callbackUrl })
+  const { callbackUrl } = getChannelLoginConfig()
+  const data = await requestChannelLogin({ callbackUrl })
+  if (data.loginUrl) return data.loginUrl
+  return buildAigcLoginRedirectUrl(data.token)
+}
+
+// 只有手机号已通过我方短信验证码校验后才可调用；传入本次验证的手机号，
+// 不再读取 MIGU_CHANNEL_LOGIN_MSISDN 这一固定测试账号。
+export async function buildLoginRedirectUrlForMsisdn(msisdn) {
+  assertConfigured()
+  const data = await requestChannelLogin({ msisdn })
   if (data.loginUrl) return data.loginUrl
   return buildAigcLoginRedirectUrl(data.token)
 }

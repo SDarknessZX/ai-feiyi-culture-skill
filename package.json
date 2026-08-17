@@ -21,6 +21,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@alicloud/credentials": "^2.4.5",
+    "@alicloud/dysmsapi20170525": "^4.6.0",
+    "@alicloud/openapi-client": "^0.4.15",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",

@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   buildAigcLoginRedirectUrl,
   buildLoginRedirectUrl,
+  buildLoginRedirectUrlForMsisdn,
   buildPublishRedirectUrl,
   buildTaskIdRedirectUrl,
   cancelTokenTask,
@@ -14,6 +15,49 @@ import {
   reportTokenResult,
   validatePublishMediaUrl,
 } from './miguAigc.js'
+
+test('builds a one-time login URL for the phone verified in this request', async () => {
+  const originalFetch = globalThis.fetch
+  const names = [
+    'MIGU_AIGC_APP_ID',
+    'MIGU_AIGC_APP_SECRET',
+    'MIGU_CHANNEL_CODE',
+    'MIGU_CALLBACK_URL',
+    'MIGU_CHANNEL_LOGIN_SIGN_KEY',
+    'MIGU_CHANNEL_LOGIN_KEY',
+    'MIGU_CHANNEL_LOGIN_MSISDN',
+  ]
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  Object.assign(process.env, {
+    MIGU_AIGC_APP_ID: 'ability-id',
+    MIGU_AIGC_APP_SECRET: 'legacy-secret',
+    MIGU_CHANNEL_CODE: 'channel-id',
+    MIGU_CALLBACK_URL: 'https://example.com/callback',
+    MIGU_CHANNEL_LOGIN_SIGN_KEY: 'dedicated-signature-key',
+    MIGU_CHANNEL_LOGIN_KEY: 'dedicated-login-key',
+    MIGU_CHANNEL_LOGIN_MSISDN: '13900000000',
+  })
+
+  let loginPayload
+  globalThis.fetch = async (requestUrl) => {
+    const request = new URL(String(requestUrl))
+    loginPayload = JSON.parse(request.searchParams.get('data'))
+    return new Response(JSON.stringify({ token: 'verified-phone-token' }), { status: 200 })
+  }
+
+  try {
+    const result = new URL(await buildLoginRedirectUrlForMsisdn('18812345678'))
+    assert.equal(loginPayload.msisdn, '18812345678')
+    assert.equal(loginPayload.key, 'dedicated-login-key')
+    assert.equal(result.searchParams.get('cToken'), 'verified-phone-token')
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]
+      else process.env[name] = previous[name]
+    }
+  }
+})
 
 test('preserves Migu business error codes for server and UI classification', async () => {
   const originalFetch = globalThis.fetch
